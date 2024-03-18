@@ -939,7 +939,7 @@ plot(ce1, plot = FALSE)[[1]] +
 
 ```{r}
 #| label: tbl-craving-traitg
-#| tbl-cap: Differences in ΔFCR (craving) between exposure modes at different levels of olfactory imagery.
+#| tbl-cap: Differences in ΔFCR (craving) between exposure modes at different levels of gustatory imagery.
 
 tmp <- emmeans(
   fit_craving_g, 
@@ -1008,7 +1008,7 @@ tmp |>
 
 ```{r}
 #| label: fig-volume-traitg
-#| fig-cap: Differences in ΔFCR (volume) between exposure modes at different levels of olfactory imagery.
+#| fig-cap: Differences in ΔFCR (volume) between exposure modes at different levels of gustatory imagery.
 
 tmp |> 
   mutate(Parameter = fct_reorder(Parameter, Mean)) |> 
