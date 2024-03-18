@@ -1,0 +1,533 @@
+---
+title: 'Computational notebook supplement to "*Smell-e Technology: Validating immersive multisensory VR food environments to study food choice*"'
+author: 
+  - name: Matti Vuorre
+    orcid: 0000-0001-5052-066X
+    affiliation: Tilburg University
+    affiliation-url: https://www.tilburguniversity.edu/staff/m-j-vuorre
+site-url: https://github.com/mvuorre/smell-e
+citation:
+  type: article-journal
+  container-title: "PsyArXiv"
+  doi: tbd
+  url: tbd
+date: now
+license: "CC BY"
+format: 
+  typst: 
+    toc: true
+  html:
+    theme: zephyr
+    # code-link: true # Slow!
+    toc: true
+    toc-depth: 2
+    toc-title: Contents
+    df-print: kable
+    embed-resources: false
+title-block-banner: true
+title-block-style: default
+---
+
+```{r}
+#| label: setup
+#| include: false
+#| cache: false
+
+knitr::opts_chunk$set(
+  echo = knitr::is_html_output(),
+  warning = FALSE,
+  message = FALSE
+)
+```
+
+## Preface
+
+This document is a computational notebook supplement to "Smell-e Technology: Validating immersive multisensory VR food environments to study food choice". This is a Quarto (<https://quarto.org/>) document whose source code is on GitHub (<https://github.com/mvuorre/smell-e>). The pre-registration is at <https://osf.io/6hjax> and the dataset at <https://osf.io/n8gm3/>.
+
+```{r}
+#| label: packages
+#| cache: false
+
+library(patchwork)
+library(emmeans)
+library(scales)
+library(cmdstanr)
+library(brms)
+library(ggbeeswarm)
+library(readxl)
+library(Hmisc)
+library(BSDA)
+library(gt)
+library(janitor)
+library(tidyverse)
+
+# Plotting
+theme_set(
+  theme_linedraw() +
+    theme(panel.grid = element_blank())
+)
+
+# HMC
+dir.create("models", FALSE)
+options(
+  mc.cores = 4,
+  brms.backend = "cmdstanr"
+)
+ITER <- 5000
+```
+
+```{r}
+#| label: data-load
+
+# Download the blinded dataset from OSF and then recode the relevant variables.
+path <- "data/data-blinded.xlsx"
+if (!file.exists(path)) {
+  dir.create(dirname(path))
+  download.file("https://osf.io/download/c93yp/", path)
+}
+dat <- read_xlsx(path) |> 
+  clean_names()
+dat <- dat |> 
+  mutate(
+    treatment = factor(treatment_condition_blinded),
+    exposure = factor(exposure_mode_blinded),
+    stimulus = factor(stimuli_type_blinded), 
+    gender = factor(gender),
+    volume = salivary_volume,
+    craving = craving_chocolate,
+    liking = liking_chocolate,
+    presence = presence_average,
+    bmi = bmi_kg_m2,
+    .keep = "unused"
+  )
+```
+
+## Debriefing Checks
+
+>"To check if participants were effectively blinded to study aims, we will compare the observed proportion of correct answers in debriefing questionnaires against that of chance level (0.09 from 11 possible options) using a one-sample exact binomial test." (Preregistration)
+
+```{r}
+#| label: debriefing-check
+
+tmp <- dat |> 
+  distinct(participant_id, debriefing_check_guessed_study_aim_yes_no) |> 
+  pull(debriefing_check_guessed_study_aim_yes_no) |> 
+  table()
+binom.test(rev(tmp))
+```
+
+The proportion of individuals with "Yes" in `debriefing_check_guessed_study_aim_yes_no` was 0.29.
+
+## Manipulation Checks 
+
+>"We will assess whether hunger ratings significantly differ from a neutral value (i.e., midpoint of the 100 mm VAS) using a one-sample z-test (test value: 50)." 
+
+```{r}
+#| label: manip-check-1
+tmp <- dat |> 
+  summarise(
+    hunger = mean(hunger),
+    craving = mean(craving),
+    liking = mean(liking),
+    .by = participant_id
+  )
+z.test(tmp$hunger, mu = 50, sigma.x = sd(tmp$hunger))
+```
+
+Mean hunger was not significantly different from 50.
+
+>"Likewise, we will assess whether our observed ratings are similar to that of a related study that successfully implemented the same hunger manipulation as this study (cf. van der Waal et al., 2021), using a one-sample z-test (test value: 62.95)."
+
+```{r}
+#| label: manip-check-2
+
+z.test(tmp$craving, mu = 62.95, sigma.x = sd(tmp$craving))
+```
+
+Mean craving was significantly less than 62.95.
+
+>"We will examine whether participants perceived the food stimulus (i.e., chocolate) as sufficiently rewarding by comparing liking scores against a neutral mid-value (i.e., 50 on a 100mm VAS anchored from “Not At All” to “Very Much” )."
+
+```{r}
+#| label: manip-check-3
+
+t.test(tmp$liking, mu = 50)
+```
+
+Mean liking was significantly greater than 50.
+
+## H1: Stimuli Type, Exposure mode and Psychological/Physiological FCRs
+
+>"We will formulate a linear mixed model for each primary outcome (N=2), with main and interaction effects of Stimuli Type and Exposure Mode as fixed factors, Participant as a random factor, and VR Familiarity and  Demographics (i.e., Sex, Age, self-reported BMI) as covariates. We will estimate all models using the brms R package. We will use the package’s default (noninformative) prior distributions on all parameters, and will draw sufficient posterior samples to meet model convergence as assessed by the Rhat metric."
+
+We first show a plot of the raw data and means + SEs (@fig-data)---the numbers are in @tbl-data.
+
+```{r}
+#| label: fig-data
+#| fig-height: 3
+#| fig-width: 7
+#| fig-cap: Raw data (empty points) and means with SEs (filled points with lines).
+
+dat |> 
+  pivot_longer(cols = c(volume, craving)) |> 
+  ggplot(aes(exposure, value, col = stimulus)) +
+  scale_color_brewer(
+    "Stimulus",
+    palette = "Set1"
+  ) +
+  geom_point(
+    shape = 1,
+    alpha = 0.25,
+    position = position_quasirandom(width = .2, dodge.width = .6)
+  ) +
+  stat_summary(
+    fun.data = mean_se,
+    size = 0.7,
+    position = position_quasirandom(width = .2, dodge.width = .6)
+  ) +
+  labs(x = "Exposure", y = "Value") +
+  facet_wrap(
+    "name", 
+    scales = "free", 
+    labeller = as_labeller(~str_to_sentence(.x))
+  )
+```
+
+```{r}
+#| label: tbl-data
+#| tbl-cap: Table of means and SEs.
+
+dat |> 
+  pivot_longer(cols = c(craving, volume), names_to = "Outcome") |> 
+  summarise(
+    mean = mean(value),
+    se = sd(value) / sqrt(n()),
+    .by = c(Outcome, exposure, stimulus)
+  ) |> 
+  mutate(
+    mean_se = str_glue("{number(mean, .01)} ({number(se, .01)})"), 
+    .keep = "unused"
+  ) |> 
+  pivot_wider(
+    names_from = stimulus,
+    values_from = mean_se, names_vary = "slowest",
+    names_glue = "S{stimulus} {.value}"
+  ) |> 
+  gt()
+```
+
+We specify the model as follows:
+
+```{r}
+#| label: h1-model
+#| echo: true
+
+# Set contrast codes and specify the model
+options(contrasts = c(unordered = "contr.sum", ordered = "contr.poly"))
+model_craving <- bf(
+  craving ~
+    stimulus * exposure + familiarity_vr + gender + age + bmi +
+    (1 | participant_id)
+)
+model_volume <- bf(
+  volume ~
+    stimulus * exposure + familiarity_vr + gender + age + bmi +
+    (1 | participant_id)
+)
+```
+
+>"Because we do not have specific quantitative predictions regarding our hypotheses, we will standardize (“z-score”) both outcome variables before analysis. This will then allow us to quantify uncertainties regarding common parameter magnitude cutoffs, such as 0.1 standard deviations for a “small” effect, in absence of theoretically informed predictions in actual units of the outcomes."
+
+```{r}
+#| label: dat-scale
+#| echo: true
+
+# z-score all numeric variables.
+dat <- dat |> 
+  mutate(
+    across(
+      c(volume, craving, familiarity_vr, age, bmi, presence), 
+      ~as.numeric(scale(.))
+      )
+    )
+```
+
+```{r}
+#| label: tbl-data-z
+#| tbl-cap: Table of z-score means and SEs.
+
+dat |> 
+  pivot_longer(cols = c(craving, volume), names_to = "Outcome") |> 
+  summarise(
+    mean = mean(value),
+    se = sd(value) / sqrt(n()),
+    .by = c(Outcome, exposure, stimulus)
+  ) |> 
+  mutate(
+    mean_se = str_glue("{number(mean, .01)} ({number(se, .01)})"), 
+    .keep = "unused"
+  ) |> 
+  pivot_wider(
+    names_from = stimulus,
+    values_from = mean_se, names_vary = "slowest",
+    names_glue = "S{stimulus} {.value}"
+  ) |> 
+  gt()
+```
+
+
+```{r}
+#| label: h1-sample
+
+# Estimate the model
+fit_craving <- brm(
+  model_craving,
+  dat,
+  iter = ITER,
+  file = "models/brm-h1-craving"
+)
+
+fit_volume <- brm(
+  model_volume,
+  dat,
+  iter = ITER,
+  file = "models/brm-h1-volume"
+)
+
+# Function to summarise samples
+sm <- function(x) {
+  bayestestR::describe_posterior(
+    x,
+    centrality = "mean",
+    dispersion = TRUE,
+    rope_ci = 1
+  ) |> 
+    select(-c(CI, ROPE_CI, ROPE_low, ROPE_high))
+}
+
+# Table function
+gt2 <- function(x, decimals = 2) {
+  x |>   
+    gt() |> 
+    fmt_number(decimals = decimals)
+}
+```
+
+### H1A
+
+>"H1A will be supported if the coefficient indicating FCR difference in food versus non-food conditions (stimulus type effect; ΔFCR) is greater than zero for all exposure modes."
+
+We define ΔFCR = stimulus2 - stimulus1
+
+#### Craving
+
+```{r}
+emm_h1a_craving <- emmeans(fit_craving, ~stimulus * exposure)
+contrast(emm_h1a_craving, "revpairwise", by = "exposure") |> 
+  sm() |> 
+  mutate(
+    Parameter = str_replace(Parameter, "stimulus2 - stimulus1", "ΔFCR")
+  )
+```
+
+The above table includes the numerical summaries of the posterior distributions of parameters answering this question. Mean and SD are the posterior mean and standard deviation. CI indicates 95% Credible Intervals. `pd` is the posterior probability of direction. We have specified one-tailed tests so claim discovery if `pd` >= 0.95 in the hypothesized direction. `% in ROPE` is the posterior probability in the [-0.1, 0.1] interval, and can be used to assess equivalence to an interval around zero---H1D. ΔFCR was greater than zero in all exposures.
+
+#### Volume
+
+```{r}
+emm_h1a_volume <- emmeans(fit_volume, ~stimulus * exposure)
+contrast(emm_h1a_volume, "revpairwise", by = "exposure") |> 
+  sm() |> 
+  mutate(
+    Parameter = str_replace(Parameter, "stimulus2 - stimulus1", "ΔFCR")
+  )
+```
+
+ΔFCR was greater than zero only in exposure=1.
+
+### H1B
+
+>"H1B will be supported if the coefficient indicating ΔFCR is greater in the multisensory VR condition compared to the unisensory VR condition."
+
+#### Craving
+
+```{r}
+contrast(emm_h1a_craving, "revpairwise", by = "exposure") |> 
+  contrast("revpairwise", by = NULL) |> 
+  sm() |> 
+  mutate(
+    Parameter = str_replace_all(Parameter, "stimulus2 - stimulus1", "ΔFCR") |> 
+      str_replace_all("exposure", "E")
+  )
+```
+
+ΔFCR is greater in exposure 1 than 2 and 3.
+
+#### Volume
+
+```{r}
+contrast(emm_h1a_volume, "revpairwise", by = "exposure") |> 
+  contrast("revpairwise", by = NULL) |> 
+  sm() |> 
+  mutate(
+    Parameter = str_replace_all(Parameter, "stimulus2 - stimulus1", "ΔFCR") |> 
+      str_replace_all("exposure", "E")
+  )
+```
+
+ΔFCR is greater in exposure 1 than 3.
+
+### H1C
+
+>"H1C will be supported if the coefficient indicating ΔFCR is greater in the real-life condition compared to the unisensory VR condition."
+
+Can look these up from above tables when exposure labels are known.
+
+### H1D
+
+>"To test hypothesis 1D—that the difference between food vs non-food FCR is equal in the multisensory VR condition and real life conditions—we will use an equivalence testing framework. That is, we will consider FCR differences within 0.1 standard deviations from one another as statistically equivalent. If 95% or more of the posterior distribution of the difference in FCR differences in multisensory VR and real-life is within the [-0.1, 0.1] interval, we will claim that they are equal. That is, that multisensory VR and real life cause practically identical FCR differences."
+
+Can look these up from above tables when exposure labels are known.
+
+## H2: Multisensory VR Exposure and Underlying Psychological Processes
+
+>"To assess whether the multisensory VR effect on FCRs might be explained by participants’ experiences of presence, we will expand the above model to include two additional regression paths: One predicting presence from VR exposure mode (i.e., unisensory versus multisensory VR), and one predicting (in an otherwise identical model to above) FCRs from presence. All paths will have by-person random intercepts. We then quantify whether presence mediates FCR-enhancing effects of the multisensory VR condition by multiplying the VR exposure mode (unisensory VR vs multisensory VR) -> immersion path coefficient with the immersion -> FCR path coefficient, and other standard mediation metrics, such as dividing the above metric with the total path coefficient."
+
+The schematic for this model is in @fig-dag.
+
+```{r}
+#| label: fig-dag
+#| fig-height: 1
+#| fig-width: 3
+#| fig-cap: "Schematic of the proposed mediation model. E: Exposure, P: Presence, FCR: Food cue response."
+
+library(dagitty)
+g <- dagitty("dag{ 
+  E -> P -> FCR ;
+  E -> FCR ;
+ }")
+coordinates(g) <- list(
+  x = c(E = 0, P = 1, FCR = 2),
+  y = c(E = 0, P = -0.1, FCR = 0)
+)
+plot(g)
+```
+
+The model syntax is as follows
+
+```{r}
+#| label: model-2-syntax
+#| echo: true
+
+c1 <- bf(
+  presence ~ exposure + (1 |p| participant_id)
+)
+c2 <- bf(
+  craving ~
+    stimulus * exposure + familiarity_vr + gender + age + bmi + presence +
+    (1 |p| participant_id)
+)
+model_craving_med <- c1 + c2 + set_rescor(FALSE)
+```
+
+```{r}
+fit_craving_med <- brm(
+  model_craving_med,
+  dat |> drop_na(presence),
+  iter = ITER,
+  file = "models/brm-h2-craving"
+)
+
+v2 <- bf(
+  volume ~
+    stimulus * exposure + familiarity_vr + gender + age + bmi + presence +
+    (1 |p| participant_id)
+)
+fit_volume_med <- brm(
+  c1 + v2 + set_rescor(FALSE),
+  dat |> drop_na(presence),
+  iter = ITER,
+  file = "models/brm-h2-volume"
+)
+```
+
+### Craving
+
+The path coefficients and their transformations are summarised below:
+
+```{r}
+hypotheses_craving <- c(
+    `E->P` = "presence_exposure1 = 0",
+    `P->FCR` = "craving_presence = 0",
+    `E->P * P->FCR` = "presence_exposure1 * craving_presence = 0",
+    Prop_mediated = "(presence_exposure1 * craving_presence) / 
+    (presence_exposure1 * craving_presence + craving_exposure1) = 0"
+  )
+
+h_craving <- hypothesis(
+  fit_craving_med,
+  hypotheses_craving
+)
+
+h_craving$samples |> 
+  set_names(h_craving$hypothesis$Hypothesis) |> 
+  sm()
+```
+
+```{r}
+#| fig-height: 2.4
+
+cc1 <- conditional_effects(
+  fit_craving_med,
+  "exposure",
+  resp = "presence",
+  robust = FALSE
+  )
+
+cc2 <- conditional_effects(
+  fit_craving_med,
+  "presence",
+  resp = "craving",
+  robust = FALSE
+)
+plot(cc1, plot = FALSE)[[1]] | plot(cc2, plot = FALSE)[[1]]
+```
+
+The indirect effect `pd` < 95%.
+
+### Volume
+
+```{r}
+hypotheses_volume <- hypotheses_craving |> 
+  str_replace_all("craving", "volume") |> 
+  set_names(h_craving$hypothesis$Hypothesis)
+
+h_volume <- hypothesis(
+  fit_volume_med,
+  hypotheses_volume
+)
+h_volume$samples |> 
+  set_names(h_volume$hypothesis$Hypothesis) |> 
+  sm()
+```
+
+```{r}
+#| fig-height: 2.4
+
+cc1 <- conditional_effects(
+  fit_volume_med,
+  "exposure",
+  resp = "presence",
+  robust = FALSE
+  )
+
+cc2 <- conditional_effects(
+  fit_volume_med,
+  "presence",
+  resp = "volume",
+  robust = FALSE
+)
+plot(cc1, plot = FALSE)[[1]] | plot(cc2, plot = FALSE)[[1]]
+```
+
+The indirect effect `pd` > 95%.
