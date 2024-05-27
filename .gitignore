@@ -8,5 +8,8 @@
 *_cache
 /data/
 /models/
+index_cache/
+index_files/
 *.pdf
 *.html
+*.docx

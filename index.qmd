@@ -1,22 +1,16 @@
 ---
-title: 'Computational notebook supplement to "*Smell-e Technology: Validating immersive multisensory VR food environments to study food choice*"'
+title: 'Smell-e Technology: Validating immersive multisensory VR food environments to study food choice'
 author: 
   - name: Matti Vuorre
     orcid: 0000-0001-5052-066X
     affiliation: Tilburg University
     affiliation-url: https://www.tilburguniversity.edu/staff/m-j-vuorre
 site-url: https://github.com/mvuorre/smell-e
-citation:
-  type: article-journal
-  container-title: "PsyArXiv"
-  doi: tbd
-  url: tbd
 date: now
 license: "CC BY"
+bibliography: bibliography.bib
 format: 
-  typst: 
-    toc: true
-    toc-depth: 2
+  docx: default
   html:
     theme: zephyr
     # code-link: true # Slow!
@@ -34,22 +28,7 @@ title-block-style: default
 #| include: false
 #| cache: false
 
-knitr::opts_chunk$set(
-  echo = knitr::is_html_output(),
-  cache = TRUE,
-  warning = FALSE,
-  message = FALSE
-)
-```
-
-## Preface
-
-This document is a computational notebook supplement to "Smell-e Technology: Validating immersive multisensory VR food environments to study food choice". This is a Quarto (<https://quarto.org/>) document whose source code is on GitHub (<https://github.com/mvuorre/smell-e>). The pre-registration is at <https://osf.io/6hjax> and the dataset at <https://osf.io/n8gm3/>.
-
-```{r}
-#| label: packages
-#| cache: false
-
+# Package
 library(patchwork)
 library(emmeans)
 library(scales)
@@ -59,9 +38,21 @@ library(ggbeeswarm)
 library(readxl)
 library(Hmisc)
 library(BSDA)
-library(gt)
+library(knitr)
 library(janitor)
 library(tidyverse)
+
+# Document options
+knitr::opts_chunk$set(
+  echo = knitr::is_html_output(),
+  cache = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  fig.align = "center",
+  fig.height = 2.6,
+  fig.width = 7.6,
+  dpi = 220
+)
 
 # Plotting
 theme_set(
@@ -69,19 +60,30 @@ theme_set(
     theme(panel.grid = element_blank())
 )
 
-# HMC
+# Other options
 dir.create("models", FALSE)
+options(  
+  # Table options
+  knitr.kable.NA = "",
+  digits = 2,
+  # HMC and parallel computation options
+  brms.backend = Sys.getenv("BRMS_BACKEND", "rstan"), 
+  brms.threads = as.integer(Sys.getenv("BRMS_THREADS", 1)),
+  mc.cores = as.integer(Sys.getenv("MAX_CORES", 4)),
+  # Default contrasts
+  contrasts = c(unordered = "contr.treatment", ordered = "contr.poly")
+)
 ITER <- 5000
 ```
 
 ```{r}
 #| label: data-load
 
-# Download the blinded dataset from OSF and then recode the relevant variables.
-path <- "data/data-blinded.xlsx"
+# Download the dataset from OSF and then recode the relevant variables.
+path <- "data/data.xlsx"
 if (!file.exists(path)) {
   dir.create(dirname(path))
-  download.file("https://osf.io/download/c93yp/", path)
+  download.file("https://osf.io/download/kwrs6/", path)
 }
 
 # Read with clean names
@@ -91,22 +93,26 @@ dat <- read_xlsx(path) |>
 # Rename and label
 dat <- dat |> 
   mutate(
+    participant_id,
     exposure = factor(
-      exposure_mode_blinded, 
-      levels = 1:3, 
-      labels = c("RL", "MVR", "UVR")
+      exposure_mode_uvr_vs_mvr_vs_rl, 
+      levels = c("RL", "MVR", "UVR"),
     ),
     stimulus = factor(
-      stimuli_type_blinded,
-      levels = 1:2,
-      labels = c("NF", "F")
-      ), 
-    gender = factor(gender),
+      stimuli_type_nf_vs_f,
+      levels = c("NF", "F")
+    ), 
+    gender = factor(
+      gender,
+      levels = 1:3,
+      labels = c("Male", "Female", "Other")
+    ),
     volume = salivary_volume,
-    craving = craving_chocolate,
+    craving = subjective_craving_chocolate,
     liking = liking_chocolate,
     presence = presence_average,
     bmi = bmi_kg_m2,
+    familiarity_vr,
     trait_g = trait_g_average,
     trait_o = trait_o_average,
     state_i = state_imagery_average,
@@ -119,101 +125,52 @@ dat <- dat |>
     across(
       c(familiarity_vr, age, bmi, presence, trait_g, trait_o, state_i), 
       ~as.numeric(scale(., scale = FALSE))
-      )
     )
-```
-
-## Debriefing Checks
-
->"To check if participants were effectively blinded to study aims, we will compare the observed proportion of correct answers in debriefing questionnaires against that of chance level (0.09 from 11 possible options) using a one-sample exact binomial test." (Preregistration)
-
-```{r}
-#| label: debriefing-check
-
-tmp <- dat |> 
-  distinct(participant_id, debriefing_check_guessed_study_aim_yes_no) |> 
-  pull(debriefing_check_guessed_study_aim_yes_no) |> 
-  table()
-binom.test(rev(tmp))
-```
-
-The proportion of individuals with "Yes" in `debriefing_check_guessed_study_aim_yes_no` was 0.29.
-
-## Manipulation Checks 
-
->"We will assess whether hunger ratings significantly differ from a neutral value (i.e., midpoint of the 100 mm VAS) using a one-sample z-test (test value: 50)." 
-
-```{r}
-#| label: manip-check-1
-
-tmp <- dat |> 
-  summarise(
-    hunger = mean(hunger),
-    craving = mean(craving),
-    liking = mean(liking),
-    .by = participant_id
   )
-z.test(tmp$hunger, mu = 50, sigma.x = sd(tmp$hunger))
 ```
 
-Mean hunger was not significantly different from 50.
+# Results
 
->"Likewise, we will assess whether our observed ratings are similar to that of a related study that successfully implemented the same hunger manipulation as this study (cf. van der Waal et al., 2021), using a one-sample z-test (test value: 62.95)."
-
-```{r}
-#| label: manip-check-2
-
-z.test(tmp$hunger, mu = 62.95, sigma.x = sd(tmp$craving))
-```
-
-Mean craving was significantly less than 62.95.
-
->"We will examine whether participants perceived the food stimulus (i.e., chocolate) as sufficiently rewarding by comparing liking scores against a neutral mid-value (i.e., 50 on a 100mm VAS anchored from “Not At All” to “Very Much” )."
-
-```{r}
-#| label: manip-check-3
-
-t.test(tmp$liking, mu = 50)
-```
-
-Mean liking was significantly greater than 50.
-
-## Data
-
-We first show a plot of the raw data and means + SEs (@fig-data).
+We show the data summaries in @fig-data and @tbl-data.
 
 ```{r}
 #| label: fig-data
-#| fig-height: 3
-#| fig-width: 7
-#| fig-cap: Raw data (empty points) and means with SEs (filled points with lines).
+#| fig-cap: Craving (left) and salivary volume (right) means and SEs across the study conditions.
 
-dat |> 
-  pivot_longer(cols = c(volume, craving)) |> 
-  ggplot(aes(exposure, value, col = stimulus)) +
+p1 <- dat |> 
+  ggplot(aes(exposure, craving, col = stimulus)) +
+  scale_y_continuous(
+    expand = expansion(c(0.1, .1))
+  ) +
   scale_color_brewer(
     "Stimulus",
     palette = "Set1"
   ) +
-  geom_point(
-    shape = 1,
-    alpha = 0.25,
-    position = position_quasirandom(width = .2, dodge.width = .6)
-  ) +
+  # geom_point(
+  #   shape = 1,
+  #   alpha = 0.25,
+  #   position = position_quasirandom(width = .1, dodge.width = .4)
+  # ) +
   stat_summary(
     fun.data = mean_se,
-    size = 0.7,
-    position = position_quasirandom(width = .2, dodge.width = .6)
+    size = 0.55,
+    position = position_dodge(width = .2)
   ) +
-  labs(x = "Exposure", y = "Value") +
-  facet_wrap(
-    "name", 
-    scales = "free", 
-    labeller = as_labeller(~str_to_sentence(.x))
-  )
-```
+  stat_summary(
+    fun.y = mean,
+    geom = "line",
+    aes(group = stimulus),
+    linewidth = 0.33,
+    position = position_dodge(width = .2)
+  ) +
+  labs(x = "Exposure", y = "Craving")
 
-The numbers are in @tbl-data.
+p2 <- p1 +
+  aes(y = volume) +
+  labs(y = "Volume")
+
+(p1 | p2) + plot_layout(guides = "collect")
+```
 
 ```{r}
 #| label: tbl-data
@@ -232,24 +189,17 @@ dat |>
   ) |> 
   pivot_wider(
     names_from = stimulus,
-    values_from = mean_se, names_vary = "slowest",
-    names_glue = "S{stimulus} {.value}"
+    values_from = mean_se, names_vary = "slowest"
   ) |> 
-  gt()
+  kable()
 ```
 
-## H1: Stimuli Type, Exposure mode and Psychological/Physiological FCRs
+## Hypothesis 1
 
->"We will formulate a linear mixed model for each primary outcome (N=2), with main and interaction effects of Stimuli Type and Exposure Mode as fixed factors, Participant as a random factor, and VR Familiarity and  Demographics (i.e., Sex, Age, self-reported BMI) as covariates. We will estimate all models using the brms R package. We will use the package’s default (noninformative) prior distributions on all parameters, and will draw sufficient posterior samples to meet model convergence as assessed by the Rhat metric."
-
-We specify the model as follows:
+To examine the effects of stimulus type and exposure mode on both psychological and physiological food-cue responses (FCRs), we specified a multilevel regression model that predicted craving (or salivary volume, in a separate model) from stimulus type (food [F] / non-food [NF]), exposure type (real life [RL] / multisensory virtual reality [MVR] / unisensory VR [UVR]), and their interactions both as fixed and random effects across participants. In addition, we specified VR familiarity, sex, age, and self-reported BMI as (centered) covariates as fixed effects. We used the R package brms, with default noninformative prior distributions, for analyses [@bürkner2017; @r2024].
 
 ```{r}
 #| label: h1-sample
-#| echo: true
-
-# Set contrast codes and specify the model
-options(contrasts = c(unordered = "contr.sum", ordered = "contr.poly"))
 
 # Estimate the model
 fit_craving <- brm(
@@ -277,754 +227,541 @@ sm <- function(x, test = "pd", rope_range = c(-0.1, 0.1)) {
     centrality = "mean",
     dispersion = TRUE,
     test = test,
-    rope_ci = 1,
+    rope_ci = 1.0,
     rope_range = rope_range
   ) |>
     select(-any_of(c("CI", "ROPE_CI", "ROPE_low", "ROPE_high"))) |> 
-    mutate(Parameter = str_replace_all(Parameter, "F - NF", "ΔFCR"))
-}
-
-# Table function
-gt2 <- function(x, decimals = 2) {
-  x |>   
-    gt() |> 
-    fmt_number(decimals = decimals)
+    mutate(
+      Parameter = str_replace_all(Parameter, "F - NF", "ΔFCR"),
+      across(any_of(c("pd", "ROPE_Percentage")), ~percent(., .01))
+    ) |> 
+    mutate(
+      CI = str_glue("[{number(CI_low, .01)}, {number(CI_high, .01)}]"), 
+      .after = SD
+    ) |> 
+    rename_with(~str_remove(., "_Percentage"))
 }
 ```
 
-### H1A
-
->"H1A will be supported if the coefficient indicating FCR difference in food versus non-food conditions (stimulus type effect; ΔFCR) is greater than zero for all exposure modes."
-
-We define ΔFCR = F - NF
-
-#### Craving
+We then proceeded to test H1A (ΔFCR [F - NF] > 0), and show the results in @tbl-h1a and @fig-h1a. Given the directional hypothesis, and our plan to use a conventional 5% cutoff, the results showed that food stimuli elicit greater craving in all exposure conditions, but greater salivary volume only in the real life condition.
 
 ```{r}
+#| label: tbl-h1a
+#| tbl-cap: Differences in food-cue responses across exposure conditions. Mean, SD, and CI indicate the posterior mean, standard deviation, and 95% Credible Interval. pd indicates the posterior probability of direction.
+
 emm_h1a_craving <- emmeans(fit_craving, ~stimulus * exposure)
-contrast(emm_h1a_craving, "revpairwise", by = "exposure") |> 
+emm_h1a_craving_res <- contrast(
+  emm_h1a_craving, "revpairwise", by = "exposure"
+) |> 
   sm()
-```
-
-The above table includes the numerical summaries of the posterior distributions of parameters answering this question. Mean and SD are the posterior mean and standard deviation. CI indicates 95% Credible Intervals. `pd` is the posterior probability of direction. We have specified one-tailed tests so claim discovery if `pd` >= 0.95 in the hypothesized direction. ΔFCR was greater than zero in all exposures.
-
-#### Volume
-
-```{r}
 emm_h1a_volume <- emmeans(fit_volume, ~stimulus * exposure)
-contrast(emm_h1a_volume, "revpairwise", by = "exposure") |> 
+emm_h1a_volume_res <- contrast(
+  emm_h1a_volume, "revpairwise", by = "exposure"
+) |> 
   sm()
+bind_rows(
+  emm_h1a_craving_res,
+  emm_h1a_volume_res,
+  .id = "Outcome"
+) |> 
+  mutate(
+    Outcome = factor(Outcome, labels = c("Craving", "Volume"))
+  ) |> 
+  select(-starts_with("CI_")) |> 
+  kable()
 ```
 
-ΔFCR was greater than zero only in RL exposure.
-
-### H1B
-
->"H1B will be supported if the coefficient indicating ΔFCR is greater in the multisensory VR condition compared to the unisensory VR condition."
-
-#### Craving
-
 ```{r}
-contrast(emm_h1a_craving, "revpairwise", by = "exposure") |> 
-  contrast("revpairwise", by = NULL) |> 
-  sm() 
+#| label: fig-h1a
+#| fig-cap: Differences in food-cue responses across exposure conditions.
+
+bind_rows(
+  emm_h1a_craving_res,
+  emm_h1a_volume_res,
+  .id = "Outcome"
+) |>
+  mutate(
+    Outcome = factor(Outcome, labels = c("Craving", "Volume")),
+    Parameter = factor(
+      Parameter, 
+      levels = c("ΔFCR RL", "ΔFCR MVR", "ΔFCR UVR"),
+      labels = c("RL", "MVR", "UVR")
+    )
+  ) |> 
+  tibble() |> 
+  ggplot(aes(Parameter, Mean, fill = pd > 0.975)) +
+  scale_fill_manual(values = c("white", "black")) +
+  scale_y_continuous(
+    "ΔFCR"
+  ) +
+  geom_hline(yintercept = 0, linewidth = 0.2) +
+  geom_pointrange(aes(ymin = CI_low, ymax = CI_high), shape = 21) +
+  guides(fill = "none") +
+  labs(x = "Condition", y = "Estimate") +
+  facet_wrap("Outcome", scales = "free")
 ```
 
-ΔFCR is greater in RL than either MVR or UVR.
-
-#### Volume
+Our second hypothesis (H1B) concerned differences in ΔFCRs between exposure conditions. Specifically, we hypothesized that ΔFCR would be greater in the multisensory VR condition compared to the unisensory VR condition (ΔFCRUVR < ΔFCRMVR). As shown in @tbl-h1b and @fig-h1b, the posterior probability of direction of this quantity did not exceed 95% for either craving or volume. We then turned to our third hypothesis (H1C), asserting that ΔFCR is greater in the real-life condition compared to the unisensory VR condition. @tbl-h1b and @fig-h1b show that this hypothesis was supported for both craving and salivary volume.
 
 ```{r}
-contrast(emm_h1a_volume, "revpairwise", by = "exposure") |> 
-  contrast("revpairwise", by = NULL) |> 
-  sm()
+#| label: tbl-h1b
+#| tbl-cap: Differences in food-cue response differences between different exposure conditions.
+
+emm_h1b_craving <- contrast(emm_h1a_craving, "revpairwise", by = "exposure") |> 
+  contrast("pairwise", by = NULL) |> 
+  sm(
+    test = c("pd", "rope"), 
+    rope_range = c(-0.1, 0.1) * sd(dat$craving)
+  ) |> 
+  tibble()
+emm_h1b_volume <- contrast(emm_h1a_volume, "revpairwise", by = "exposure") |> 
+  contrast("pairwise", by = NULL) |> 
+  sm(
+    test = c("pd", "rope"), 
+    rope_range = c(-0.1, 0.1) * sd(dat$volume)
+  ) |> 
+  tibble()
+bind_rows(
+  emm_h1b_craving,
+  emm_h1b_volume,
+  .id = "Outcome"
+) |> 
+  mutate(
+    Outcome = factor(Outcome, labels = c("Craving", "Volume")),
+    Parameter = str_remove_all(Parameter, "ΔFCR "),
+    Parameter = str_remove_all(Parameter, "\\("),
+    Parameter = str_remove_all(Parameter, "\\)")
+  ) |> 
+  select(-starts_with("CI_")) |> 
+  kable()
 ```
 
-ΔFCR is greater in RL than UVR.
-
-### H1C
-
->"H1C will be supported if the coefficient indicating ΔFCR is greater in the real-life condition compared to the unisensory VR condition."
-
-Can look these up from above tables when exposure labels are known.
-
-### H1D
-
->"To test hypothesis 1D—that the difference between food vs non-food FCR is equal in the multisensory VR condition and real life conditions—we will use an equivalence testing framework. That is, we will consider FCR differences within 0.1 standard deviations from one another as statistically equivalent. If 95% or more of the posterior distribution of the difference in FCR differences in multisensory VR and real-life is within the [-0.1, 0.1] interval, we will claim that they are equal. That is, that multisensory VR and real life cause practically identical FCR differences."
-
-Here we hypothesize an equality, so this is the only analysis where z-scoring and using the 0.1 cutoffs is relevant. We therefore use 0.1 times the relevant outcome's standard deviation as the ROPE limits.
-
-#### Craving
-
 ```{r}
-contrast(emm_h1a_craving, "revpairwise", by = "exposure") |> 
-  contrast("revpairwise", by = NULL) |> 
-  sm(test = "rope", rope_range = c(-0.1, 0.1) * sd(dat$craving))
+#| label: fig-h1b
+#| fig-cap: Differences in food-cue response differences between different exposure conditions.
+
+bind_rows(
+  emm_h1b_craving,
+  emm_h1b_volume,
+  .id = "Outcome"
+) |> 
+  mutate(
+    Outcome = factor(Outcome, labels = c("Craving", "Volume")),
+    Parameter = str_remove_all(Parameter, "\\(ΔFCR "),
+    Parameter = str_remove_all(Parameter, "\\)")
+  ) |> 
+  tibble() |> 
+  ggplot(aes(Parameter, Mean, fill = pd > 0.975)) +
+  scale_fill_manual(values = c("white", "black")) +
+  scale_y_continuous(
+    "ΔFCR"
+  ) +
+  geom_hline(yintercept = 0, linewidth = 0.2) +
+  geom_pointrange(aes(ymin = CI_low, ymax = CI_high), shape = 21) +
+  guides(fill = "none") +
+  labs(x = "Condition", y = "Estimate") +
+  facet_wrap("Outcome", scales = "free")
 ```
 
-No DeltaFCRs are within each other's ROPE with 95%+ credibility.
+We then hypothesized that the difference between food vs non-food FCR is equal in the multisensory VR condition and real life conditions would be equal. To test this, we decided to treat ΔFCRs within 0.1 standard deviations of the respective FCR as equivalent. Then we calculated the proportion of the respective posterior distribution within that interval to ascertain confidence in the equivalence statement. We labelled these as ROPE_Percentage in @tbl-h1b. These posterior probabilities of equivalence were small (craving: 1%; volume: 45%) and we therefore did not find support for H1D.
 
-#### Volume
-
-```{r}
-contrast(emm_h1a_volume, "revpairwise", by = "exposure") |> 
-  contrast("revpairwise", by = NULL) |>
-  sm(test = "rope", rope_range = c(-0.1, 0.1) * sd(dat$volume))
-```
-
-Same as above.
-
-Can look these up from above tables when exposure labels are known.
-
-## H2: Multisensory VR Exposure and Underlying Psychological Processes
-
->"To assess whether the multisensory VR effect on FCRs might be explained by participants’ experiences of presence, we will expand the above model to include two additional regression paths: One predicting presence from VR exposure mode (i.e., unisensory versus multisensory VR), and one predicting (in an otherwise identical model to above) FCRs from presence. All paths will have by-person random intercepts. We then quantify whether presence mediates FCR-enhancing effects of the multisensory VR condition by multiplying the VR exposure mode (unisensory VR vs multisensory VR) -> immersion path coefficient with the immersion -> FCR path coefficient, and other standard mediation metrics, such as dividing the above metric with the total path coefficient."
-
-The schematic for this model is in @fig-dag.
+## Hypothesis 2
 
 ```{r}
+#| eval: false
 #| label: fig-dag
-#| fig-height: 1
-#| fig-width: 3
-#| fig-cap: "Schematic of the proposed mediation model. E: Exposure, P: Presence, FCR: Food cue response."
+#| fig-cap: "Schematic of the proposed mediation model. E: Exposure, P: Presence, dFCR: Difference in food cue response."
 
 library(dagitty)
 g <- dagitty("dag{ 
-  E -> P -> FCR ;
-  E -> FCR ;
+  E -> P -> dFCR ;
+  E -> dFCR ;
  }")
 coordinates(g) <- list(
-  x = c(E = 0, P = 1, FCR = 2),
-  y = c(E = 0, P = -0.1, FCR = 0)
+  x = c(E = 0, P = 1, dFCR = 2),
+  y = c(E = 0, P = -0.1, dFCR = 0)
 )
 plot(g)
 ```
 
-The model syntax is as follows
+We then turned to examine the potential psychological processes that might mediate the effects of VR exposure on food cue responses. To do so, we first calculated ΔFCR = FCR_Food - FCR_Nonfood for each participant. Then, we specified a multivariate regression model predicting presence from VR exposure mode (UVR / MVR), and one predicting ΔFCR from presence. We specified both paths with by-person random intercepts. We then quantified whether presence mediates FCR-enhancing effects of the multisensory VR condition by multiplying the VR exposure mode (unisensory VR vs multisensory VR) -> presence path coefficient with the presence -> FCR path coefficient.
+
+We show the results in @tbl-h2 and @fig-h2: While the multisensory VR exposure led to much greater feelings of presence, presence did not credibly predict either craving or salivary volume ΔFCR.
 
 ```{r}
-#| label: model-2-syntax
-#| echo: true
+dat2 <- dat |> 
+  filter(exposure != "RL") |> 
+  mutate(exposure = factor(exposure, levels = c("UVR", "MVR"))) |> 
+  select(
+    participant_id, stimulus, exposure, 
+    craving, volume, presence, state_i,
+    familiarity_vr, gender, age, bmi
+  ) |> 
+  # Aggregate state_i to exposures so can use in mediation
+  mutate(state_i = mean(state_i), .by = c(participant_id, exposure)) |> 
+  pivot_wider(
+    names_from = stimulus, 
+    values_from = c(craving, volume)
+  ) |> 
+  mutate(
+    d_craving = craving_F - craving_NF,
+    d_volume = volume_F - volume_NF, 
+    .keep = "unused"
+  )
 
 c1 <- bf(
   presence ~ exposure + (1 |p| participant_id)
 )
 c2 <- bf(
-  craving ~
-    stimulus * exposure + familiarity_vr + gender + age + bmi + presence +
+  d_craving ~
+    exposure + familiarity_vr + gender + age + bmi + presence +
     (1 |p| participant_id)
 )
-model_craving_med <- c1 + c2 + set_rescor(FALSE)
-```
 
-```{r}
-fit_craving_med <- brm(
-  model_craving_med,
-  dat |> drop_na(presence),
+fit_craving_h2 <- brm(
+  c1 + c2 + set_rescor(FALSE),
+  dat2,
   iter = ITER,
-  file = "models/brm-h2-craving"
+  file = "models/brm-h2-craving", 
+  control = list(adapt_delta = 0.99),
+  file_refit = "on_change"
 )
 
 v2 <- bf(
-  volume ~
-    stimulus * exposure + familiarity_vr + gender + age + bmi + presence +
+  d_volume ~
+    exposure + familiarity_vr + gender + age + bmi + presence +
     (1 |p| participant_id)
 )
-fit_volume_med <- brm(
+fit_volume_h2 <- brm(
   c1 + v2 + set_rescor(FALSE),
-  dat |> drop_na(presence),
+  dat2,
   iter = ITER,
-  file = "models/brm-h2-volume"
+  file = "models/brm-h2-volume",
+  control = list(adapt_delta = 0.99),
+  file_refit = "on_change"
 )
 ```
 
-### Craving
-
-The path coefficients and their transformations are summarised below:
-
 ```{r}
+#| label: tbl-h2
+#| tbl-cap: Results of mediation models.
+
 hypotheses_craving <- c(
-    `E->P` = "presence_exposure1 = 0",
-    `P->FCR` = "craving_presence = 0",
-    `E->P * P->FCR` = "presence_exposure1 * craving_presence = 0",
-    Prop_mediated = "(presence_exposure1 * craving_presence) / 
-    (presence_exposure1 * craving_presence + craving_exposure1) = 0"
-  )
+  `E->P` = "presence_exposureMVR = 0",
+  `P->ΔFCR` = "dcraving_presence = 0",
+  `E->P X P->ΔFCR` = "presence_exposureMVR * dcraving_presence = 0",
+  Prop_mediated = "(presence_exposureMVR * dcraving_presence) / 
+    (presence_exposureMVR * dcraving_presence + dcraving_exposureMVR) = 0"
+)
 
 h_craving <- hypothesis(
-  fit_craving_med,
+  fit_craving_h2,
   hypotheses_craving
 )
 
-h_craving$samples |> 
-  set_names(h_craving$hypothesis$Hypothesis) |> 
-  sm()
-```
-
-```{r}
-#| fig-height: 2.4
-
-cc1 <- conditional_effects(
-  fit_craving_med,
-  "exposure",
-  resp = "presence",
-  robust = FALSE
-  )
-
-cc2 <- conditional_effects(
-  fit_craving_med,
-  "presence",
-  resp = "craving",
-  robust = FALSE
-)
-plot(cc1, plot = FALSE)[[1]] | plot(cc2, plot = FALSE)[[1]]
-```
-
-The indirect effect `pd` < 95%.
-
-### Volume
-
-```{r}
 hypotheses_volume <- hypotheses_craving |> 
-  str_replace_all("craving", "volume") |> 
+  str_replace_all("dcraving", "dvolume") |> 
   set_names(h_craving$hypothesis$Hypothesis)
 
 h_volume <- hypothesis(
-  fit_volume_med,
+  fit_volume_h2,
   hypotheses_volume
 )
-h_volume$samples |> 
-  set_names(h_volume$hypothesis$Hypothesis) |> 
-  sm()
+
+bind_rows(
+  h_craving$samples |> 
+    set_names(h_craving$hypothesis$Hypothesis) |> 
+    sm(),
+  h_volume$samples |> 
+    set_names(h_volume$hypothesis$Hypothesis) |> 
+    sm() |> 
+    slice(-1), # The E->P path is not unique to outcome
+  .id = "Outcome"
+) |> 
+  mutate(Outcome = factor(Outcome, labels = c("Craving", "Volume"))) |> 
+  select(-starts_with("CI_")) |> 
+  kable()
 ```
 
 ```{r}
-#| fig-height: 2.4
+#| label: fig-h2
+#| fig.cap: Mediation analyses.
 
 cc1 <- conditional_effects(
-  fit_volume_med,
+  fit_craving_h2,
   "exposure",
   resp = "presence",
   robust = FALSE
-  )
+)
 
 cc2 <- conditional_effects(
-  fit_volume_med,
+  fit_craving_h2,
   "presence",
-  resp = "volume",
+  resp = "dcraving",
   robust = FALSE
 )
-plot(cc1, plot = FALSE)[[1]] | plot(cc2, plot = FALSE)[[1]]
+
+cc3 <- conditional_effects(
+  fit_volume_h2,
+  "presence",
+  resp = "dvolume",
+  robust = FALSE
+)
+
+p1 <- plot(
+  cc1, 
+  plot = FALSE,
+  cat_args = list(size = 3)
+  )[[1]] +
+  labs(x = "Exposure", y = "Presence") |
+  plot(
+    cc2, 
+    plot = FALSE,
+    line_args = list(color = "black", linewidth = 0.5)
+  )[[1]] +
+  labs(x = "Presence", y = "ΔFCR [Craving]") |
+  plot(
+    cc3, 
+    plot = FALSE,
+    line_args = list(color = "black", linewidth = 0.5)
+  )[[1]] +
+  labs(x = "Presence", y = "ΔFCR [Volume]")
+p1 + plot_layout(widths = c(2, 4, 4))
 ```
 
-The indirect effect `pd` > 95%.
+## Exploratory analyses
 
-## Explore: imagery mediation
+### State imagery
 
-Same as above but with imagery
+We then turned to our more exploratory analyses. Our first aim was to examine whether state gustatory mental imagery might mediate any effects of VR exposure mode on ΔFCRs. To do so, we first took the mean imagery for each participant in each VR exposure mode. Then, we conducted mediation analyses as above (Hypothesis 2) but used imagery as the mediator rather than presence. We show the results in @tbl-e1 and @fig-e1: While the multisensory VR exposure led to elevated imagery, imagery did not credibly predict either craving or salivary volume ΔFCR.
 
 ```{r}
 c1 <- bf(
   state_i ~ exposure + (1 |p| participant_id)
 )
 c2 <- bf(
-  craving ~
-    stimulus * exposure + familiarity_vr + gender + age + bmi + state_i +
+  d_craving ~
+    exposure + familiarity_vr + gender + age + bmi + state_i +
     (1 |p| participant_id)
 )
-model_craving_med <- c1 + c2 + set_rescor(FALSE)
 
-fit_craving_med_i <- brm(
-  model_craving_med,
-  dat |> drop_na(presence),
+fit_craving_e1 <- brm(
+  c1 + c2 + set_rescor(FALSE),
+  dat2,
   iter = ITER,
-  file = "models/brm-h2-craving-i"
+  file = "models/brm-craving-e1",
+  control = list(adapt_delta = 0.99),
+  file_refit = "on_change"
 )
 
 v2 <- bf(
-  volume ~
-    stimulus * exposure + familiarity_vr + gender + age + bmi + state_i +
+  d_volume ~
+    exposure + familiarity_vr + gender + age + bmi + state_i +
     (1 |p| participant_id)
 )
-fit_volume_med_i <- brm(
+fit_volume_e1 <- brm(
   c1 + v2 + set_rescor(FALSE),
-  dat |> drop_na(presence),
+  dat2,
   iter = ITER,
-  file = "models/brm-h2-volume-i"
+  file = "models/brm-volume-e1",
+    control = list(adapt_delta = 0.99),
+  file_refit = "on_change"
 )
 ```
 
-### Craving
-
-The path coefficients and their transformations are summarised below:
-
 ```{r}
+#| label: tbl-e1
+#| tbl-cap: State imagery results.
+
 hypotheses_craving <- c(
-    `E->I` = "statei_exposure1 = 0",
-    `I->FCR` = "craving_state_i = 0",
-    `E->I * I->FCR` = "statei_exposure1 * craving_state_i = 0",
-    Prop_mediated = "(statei_exposure1 * craving_state_i) / 
-    (statei_exposure1 * craving_state_i + craving_exposure1) = 0"
-  )
+  `E->P` = "statei_exposureMVR = 0",
+  `P->ΔFCR` = "dcraving_state_i = 0",
+  `E->P X P->ΔFCR` = "statei_exposureMVR * dcraving_state_i = 0",
+  Prop_mediated = "(statei_exposureMVR * dcraving_state_i) / 
+    (statei_exposureMVR * dcraving_state_i + dcraving_exposureMVR) = 0"
+)
 
 h_craving <- hypothesis(
-  fit_craving_med_i,
+  fit_craving_e1,
   hypotheses_craving
 )
 
-h_craving$samples |> 
-  set_names(h_craving$hypothesis$Hypothesis) |> 
-  sm()
-```
-
-```{r}
-#| fig-height: 2.4
-
-cc1 <- conditional_effects(
-  fit_craving_med_i,
-  "exposure",
-  resp = "statei",
-  robust = FALSE
-  )
-
-cc2 <- conditional_effects(
-  fit_craving_med_i,
-  "state_i",
-  resp = "craving",
-  robust = FALSE
-)
-plot(cc1, plot = FALSE)[[1]] | plot(cc2, plot = FALSE)[[1]]
-```
-
-### Volume
-
-```{r}
 hypotheses_volume <- hypotheses_craving |> 
-  str_replace_all("craving", "volume") |> 
+  str_replace_all("dcraving", "dvolume") |> 
   set_names(h_craving$hypothesis$Hypothesis)
 
 h_volume <- hypothesis(
-  fit_volume_med_i,
+  fit_volume_e1,
   hypotheses_volume
 )
-h_volume$samples |> 
-  set_names(h_volume$hypothesis$Hypothesis) |> 
-  sm()
+
+bind_rows(
+  h_craving$samples |> 
+    set_names(h_craving$hypothesis$Hypothesis) |> 
+    sm(),
+  h_volume$samples |> 
+    set_names(h_volume$hypothesis$Hypothesis) |> 
+    sm() |> 
+    slice(-1), # The E->P path is not unique to outcome
+  .id = "Outcome"
+) |> 
+  mutate(Outcome = factor(Outcome, labels = c("Craving", "Volume"))) |>
+  select(-starts_with("CI_")) |> 
+  kable()
 ```
 
 ```{r}
-#| fig-height: 2.4
+#| label: fig-e1
+#| fig-cap: State imagery results.
 
 cc1 <- conditional_effects(
-  fit_volume_med_i,
+  fit_craving_e1,
   "exposure",
   resp = "statei",
   robust = FALSE
-  )
+)
 
 cc2 <- conditional_effects(
-  fit_volume_med_i,
+  fit_craving_e1,
   "state_i",
-  resp = "volume",
+  resp = "dcraving",
   robust = FALSE
 )
-plot(cc1, plot = FALSE)[[1]] | plot(cc2, plot = FALSE)[[1]]
-```
 
-## Explore: Hunger interaction
-
-Same as H1 but interaction with centered hunger.
-
-```{r}
-# Estimate the model
-fit_craving_hunger <- brm(
-  craving ~
-    stimulus * exposure * hunger + familiarity_vr + gender + age + bmi +
-    (1 | participant_id),
-  dat |> mutate(hunger = hunger - mean(hunger)),
-  iter = ITER,
-  file = "models/brm-h1-craving-hunger"
+cc3 <- conditional_effects(
+  fit_volume_e1,
+  "state_i",
+  resp = "dvolume",
+  robust = FALSE
 )
 
-fit_volume_hunger <- brm(
-  volume ~
-    stimulus * exposure * hunger + familiarity_vr + gender + age + bmi +
-    (1 | participant_id),
-  dat |> mutate(hunger = hunger - mean(hunger)),
-  iter = ITER,
-  file = "models/brm-h1-volume-hunger"
-)
+p1 <- plot(
+  cc1, 
+  plot = FALSE,
+  line_args = list(color = "black", linewidth = 0.5)
+)[[1]] +
+  labs(x = "Exposure", y = "State imagery") |
+  plot(
+    cc2, 
+    plot = FALSE, 
+    line_args = list(color = "black", linewidth = 0.5)
+  )[[1]] +
+  labs(x = "State imagery", y = "ΔFCR [Craving]") |
+  plot(
+    cc3, 
+    plot = FALSE,
+    line_args = list(color = "black", linewidth = 0.5)
+  )[[1]] +
+  labs(x = "State imagery", y = "ΔFCR [Volume]")
+
+p1 + plot_layout(widths = c(2, 4, 4))
 ```
 
-I then evaluate the DeltaFCR and exposure differences therein at hunger -1SD below the mean (-24) and 1 SD above the mean hunger.
+### Trait imagery
 
-#### Craving
-
-```{r}
-hunger_values <- c(-1, 1) * sd(dat$hunger) |> as.integer()
-ce1 <- conditional_effects(
-  fit_craving_hunger,
-  "exposure:stimulus",
-  tibble(hunger = hunger_values),
-  int_conditions = list(hunger = hunger_values)
-)
-plot(ce1, plot = FALSE)[[1]] +
-  facet_wrap("hunger", labeller = label_both)
-```
-
-I show the results below in a table and a figure
+We then examined whether individuals' trait gustatory or olfactory imagery moderated any exposure effects on ΔFCRs. To do so, we expanded the models from H1 to include the main effects of gustatory and olfactory imagery (in separate models) and their interactions with stimulus, exposure, and their interaction. As is shown in @tbl-e2, the three-way interactions between stimulus, exposure, and either gustatory or olfactory imagery were not credible different from zero.
 
 ```{r}
-#| label: tbl-hunger-craving
-#| tbl-cap: Differences in ΔFCR (craving) between exposure modes at different levels of hunger.
+#| label: tbl-e2
+#| tbl-cap: Trait imagery results.
 
-emm_craving_hunger <- emmeans(
-  fit_craving_hunger, 
-  ~stimulus * exposure, 
-  by = "hunger",
-  at = list(hunger = hunger_values)
-)
-emc1 <- contrast(emm_craving_hunger, "revpairwise", by = c("exposure", "hunger")) |> 
-  contrast("revpairwise", by = NULL) |> 
-  sm()
-emc1 |> 
-  gt2()
-```
-
-```{r}
-#| label: fig-hunger-craving
-#| fig-cap: Differences in ΔFCR (craving) between exposure modes at different levels of hunger.
-
-library(ggstance)
-emc1 |> 
-  mutate(Parameter = fct_reorder(Parameter, Mean)) |> 
-  ggplot(aes(Mean, Parameter)) +
-  geom_vline(xintercept = 0, linewidth = 0.15) +
-  scale_shape_manual(
-    "95%CI excludes zero",
-    values = c(21, 19)
-  ) +
-  geom_pointrangeh(
-    aes(xmin = CI_low, xmax = CI_high, shape = pd >= 0.95),
-    fill = "white"
-  ) +
-  theme(
-    axis.title.y = element_blank(), 
-    legend.position = "none"
-  )
-```
-
-#### Volume
-
-```{r}
-ce1 <- conditional_effects(
-  fit_volume_hunger,
-  "exposure:stimulus",
-  tibble(hunger = hunger_values),
-  int_conditions = list(hunger = hunger_values)
-)
-plot(ce1, plot = FALSE)[[1]] +
-  facet_wrap("hunger", labeller = label_both)
-```
-
-```{r}
-#| label: tab-hunger-volume
-#| fig-cap: Differences in ΔFCR (volume) between exposure modes at different levels of hunger.
-
-emm_volume_hunger <- emmeans(
-  fit_volume_hunger, 
-  ~stimulus * exposure, 
-  by = "hunger",
-  at = list(hunger = hunger_values)
-)
-emv1 <- contrast(emm_volume_hunger, "revpairwise", by = c("exposure", "hunger")) |> 
-  contrast("revpairwise", by = NULL) |> 
-  sm()
-emv1 |> 
-  gt2()
-```
-
-```{r}
-#| label: fig-hunger-volume
-#| tbl-cap: Differences in ΔFCR (volume) between exposure modes at different levels of hunger.
-
-emv1 |> 
-  mutate(Parameter = fct_reorder(Parameter, Mean)) |> 
-  ggplot(aes(Mean, Parameter)) +
-  geom_vline(xintercept = 0, linewidth = 0.15) +
-  scale_shape_manual(
-    "95%CI excludes zero",
-    values = c(21, 19)
-  ) +
-  geom_pointrangeh(
-    aes(xmin = CI_low, xmax = CI_high, shape = pd >= 0.95),
-    fill = "white"
-  ) +
-  theme(
-    axis.title.y = element_blank(), 
-    legend.position = "none"
-  )
-```
-
-
-## Explore: imagery interaction
-
-Same as above but using gustatory/olfactory imagery as moderator
-
-### Olfactory
-
-```{r}
-# Estimate the model
-fit_craving_o <- brm(
-  craving ~
-    stimulus * exposure * trait_o + familiarity_vr + gender + age + bmi +
-    (1 | participant_id),
-  dat,
-  iter = ITER,
-  file = "models/brm-h1-craving-trait_o"
-)
-
-fit_volume_o <- brm(
-  volume ~
-    stimulus * exposure * trait_o + familiarity_vr + gender + age + bmi +
-    (1 | participant_id),
-  dat,
-  iter = ITER,
-  file = "models/brm-h1-volume-trait_o"
-)
-```
-
-#### Craving
-
-```{r}
-trait_o_values <- c(-1, 1) * sd(dat$trait_o) |> as.integer()
-ce1 <- conditional_effects(
-  fit_craving_o,
-  "exposure:stimulus",
-  tibble(trait_o = trait_o_values),
-  int_conditions = list(trait_o = trait_o_values)
-)
-plot(ce1, plot = FALSE)[[1]] +
-  facet_wrap("trait_o", labeller = label_both)
-```
-
-```{r}
-#| label: tbl-craving-traito
-#| tbl-cap: Differences in ΔFCR (craving) between exposure modes at different levels of olfactory imagery.
-
-tmp <- emmeans(
-  fit_craving_o, 
-  ~stimulus * exposure, 
-  by = "trait_o",
-  at = list(trait_o = trait_o_values)
-) |> 
-  contrast("revpairwise", by = c("exposure", "trait_o")) |> 
-  contrast("revpairwise", by = NULL) |> 
-  sm()
-tmp |> 
-  gt2()
-```
-
-```{r}
-#| label: fig-craving-traito
-#| fig-cap: Differences in ΔFCR (craving) between exposure modes at different levels of olfactory imagery.
-
-tmp |> 
-  mutate(Parameter = fct_reorder(Parameter, Mean)) |> 
-  ggplot(aes(Mean, Parameter)) +
-  geom_vline(xintercept = 0, linewidth = 0.15) +
-  scale_shape_manual(
-    "95%CI excludes zero",
-    values = c(21, 19)
-  ) +
-  geom_pointrangeh(
-    aes(xmin = CI_low, xmax = CI_high, shape = pd >= 0.95),
-    fill = "white"
-  ) +
-  theme(
-    axis.title.y = element_blank(), 
-    legend.position = "none"
-  )
-```
-
-#### Volume
-
-```{r}
-ce1 <- conditional_effects(
-  fit_volume_o,
-  "exposure:stimulus",
-  tibble(trait_o = trait_o_values),
-  int_conditions = list(trait_o = trait_o_values)
-)
-plot(ce1, plot = FALSE)[[1]] +
-  facet_wrap("trait_o", labeller = label_both)
-```
-
-```{r}
-#| label: tbl-volume-traito
-#| tbl-cap: Differences in ΔFCR (volume) between exposure modes at different levels of olfactory imagery.
-
-tmp <- emmeans(
-  fit_volume_o, 
-  ~stimulus * exposure, 
-  by = "trait_o",
-  at = list(trait_o = trait_o_values)
-) |> 
-  contrast("revpairwise", by = c("exposure", "trait_o")) |> 
-  contrast("revpairwise", by = NULL) |> 
-  sm()
-tmp |> 
-  gt2()
-```
-
-```{r}
-#| label: fig-volume-traito
-#| fig-cap: Differences in ΔFCR (volume) between exposure modes at different levels of olfactory imagery.
-
-tmp |> 
-  mutate(Parameter = fct_reorder(Parameter, Mean)) |> 
-  ggplot(aes(Mean, Parameter)) +
-  geom_vline(xintercept = 0, linewidth = 0.15) +
-  scale_shape_manual(
-    "95%CI excludes zero",
-    values = c(21, 19)
-  ) +
-  geom_pointrangeh(
-    aes(xmin = CI_low, xmax = CI_high, shape = pd >= 0.95),
-    fill = "white"
-  ) +
-  theme(
-    axis.title.y = element_blank(), 
-    legend.position = "none"
-  )
-```
-
-
-### Gustatory
-
-```{r}
-# Estimate the model
-fit_craving_g <- brm(
+fit_craving_e2g <- brm(
   craving ~
     stimulus * exposure * trait_g + familiarity_vr + gender + age + bmi +
     (1 | participant_id),
   dat,
   iter = ITER,
-  file = "models/brm-h1-craving-trait_g"
+  file = "models/brm-craving-e2g"
+)
+fit_craving_e2o <- brm(
+  craving ~
+    stimulus * exposure * trait_o + familiarity_vr + gender + age + bmi +
+    (1 | participant_id),
+  dat,
+  iter = ITER,
+  file = "models/brm-craving-e2o"
 )
 
-fit_volume_g <- brm(
+fit_volume_e2g <- brm(
   volume ~
     stimulus * exposure * trait_g + familiarity_vr + gender + age + bmi +
     (1 | participant_id),
   dat,
   iter = ITER,
-  file = "models/brm-h1-volume-trait_g"
+  file = "models/brm-volume-e2g"
 )
-```
-
-#### Craving
-
-```{r}
-trait_g_values <- c(-1, 1) * sd(dat$trait_g) |> as.integer()
-ce1 <- conditional_effects(
-  fit_craving_g,
-  "exposure:stimulus",
-  tibble(trait_g = trait_g_values),
-  int_conditions = list(trait_g = trait_g_values)
+fit_volume_e2o <- brm(
+  volume ~
+    stimulus * exposure * trait_o + familiarity_vr + gender + age + bmi +
+    (1 | participant_id),
+  dat,
+  iter = ITER,
+  file = "models/brm-volume-e2o"
 )
-plot(ce1, plot = FALSE)[[1]] +
-  facet_wrap("trait_g", labeller = label_both)
-```
 
-```{r}
-#| label: tbl-craving-traitg
-#| tbl-cap: Differences in ΔFCR (craving) between exposure modes at different levels of gustatory imagery.
-
-tmp <- emmeans(
-  fit_craving_g, 
-  ~stimulus * exposure, 
-  by = "trait_g",
-  at = list(trait_g = trait_g_values)
+tibble(
+  Outcome = rep(c("Craving", "Volume"), each = 2),
+  Imagery = rep(c("Gustatory", "Olfactory"), 2),
+  model = list(fit_craving_e2g, fit_craving_e2o, fit_volume_e2g, fit_volume_e2o)
 ) |> 
-  contrast("revpairwise", by = c("exposure", "trait_g")) |> 
-  contrast("revpairwise", by = NULL) |> 
-  sm()
-tmp |> 
-  gt2()
+  mutate(res = map(model, ~sm(.x) |> tail(2) |> select(-Rhat, -ESS))) |> 
+  select(-model) |> 
+  unnest(res) |> 
+  mutate(
+    Parameter = str_replace(Parameter, "b_stimulusF", "Food"),
+    Parameter = str_remove(Parameter, "exposure")
+  ) |> 
+  select(-starts_with("CI_")) |> 
+  kable()
 ```
 
-```{r}
-#| label: fig-craving-traitg
-#| fig-cap: Differences in ΔFCR (craving) between exposure modes at different levels of gustatory imagery.
+# Appendix
 
-tmp |> 
-  mutate(Parameter = fct_reorder(Parameter, Mean)) |> 
-  ggplot(aes(Mean, Parameter)) +
-  geom_vline(xintercept = 0, linewidth = 0.15) +
-  scale_shape_manual(
-    "95%CI excludes zero",
-    values = c(21, 19)
-  ) +
-  geom_pointrangeh(
-    aes(xmin = CI_low, xmax = CI_high, shape = pd >= 0.95),
-    fill = "white"
-  ) +
-  theme(
-    axis.title.y = element_blank(), 
-    legend.position = "none"
+## Debriefing Checks
+
+```{r}
+#| label: debriefing-check
+
+tmp <- dat |> 
+  distinct(participant_id, debriefing_check_guessed_study_aim_yes_no) |> 
+  pull(debriefing_check_guessed_study_aim_yes_no) |> 
+  table()
+binom.test(rev(tmp))
+```
+
+The proportion of individuals with "Yes" in `debriefing_check_guessed_study_aim_yes_no` was 0.29.
+
+## Manipulation Checks
+
+```{r}
+#| label: manip-check-1
+
+tmp <- dat |> 
+  summarise(
+    hunger = mean(hunger),
+    craving = mean(craving),
+    liking = mean(liking),
+    .by = participant_id
   )
+z.test(tmp$hunger, mu = 50, sigma.x = sd(tmp$hunger))
 ```
 
-#### Volume
+Mean hunger was not significantly different from 50.
 
 ```{r}
-ce1 <- conditional_effects(
-  fit_volume_g,
-  "exposure:stimulus",
-  tibble(trait_g = trait_g_values),
-  int_conditions = list(trait_g = trait_g_values)
-)
-plot(ce1, plot = FALSE)[[1]] +
-  facet_wrap("trait_g", labeller = label_both)
+#| label: manip-check-2
+
+z.test(tmp$hunger, mu = 62.95, sigma.x = sd(tmp$craving))
 ```
+
+Mean craving was significantly less than 62.95.
 
 ```{r}
-#| label: tbl-volume-traitg
-#| tbl-cap: Differences in ΔFCR (volume) between exposure modes at different levels of gustatory imagery.
+#| label: manip-check-3
 
-tmp <- emmeans(
-  fit_volume_g, 
-  ~stimulus * exposure, 
-  by = "trait_g",
-  at = list(trait_g = trait_g_values)
-) |> 
-  contrast("revpairwise", by = c("exposure", "trait_g")) |> 
-  contrast("revpairwise", by = NULL) |> 
-  sm()
-tmp |> 
-  gt2()
+t.test(tmp$liking, mu = 50)
 ```
 
-```{r}
-#| label: fig-volume-traitg
-#| fig-cap: Differences in ΔFCR (volume) between exposure modes at different levels of gustatory imagery.
+Mean liking was significantly greater than 50.
 
-tmp |> 
-  mutate(Parameter = fct_reorder(Parameter, Mean)) |> 
-  ggplot(aes(Mean, Parameter)) +
-  geom_vline(xintercept = 0, linewidth = 0.15) +
-  scale_shape_manual(
-    "95%CI excludes zero",
-    values = c(21, 19)
-  ) +
-  geom_pointrangeh(
-    aes(xmin = CI_low, xmax = CI_high, shape = pd >= 0.95),
-    fill = "white"
-  ) +
-  theme(
-    axis.title.y = element_blank(), 
-    legend.position = "none"
-  )
-```
-
+# References
