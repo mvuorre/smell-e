@@ -1,10 +1,10 @@
-all: renv html pdf
+all: renv render
 
 renv: renv.lock
 		Rscript -e "renv::restore()"
 
-html: index.qmd
-		quarto render $< -t html
+render: index.qmd
+		quarto render $<
 
-pdf: index.qmd
-		quarto render $< -t pdf
+clean:
+	rm -rf *_files *_cache
