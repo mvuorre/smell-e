@@ -16,6 +16,7 @@ format:
     toc-depth: 3
     toc-title: Contents
     df-print: kable
+    code-fold: true
     embed-resources: false
   docx: default
 title-block-banner: true
@@ -47,7 +48,7 @@ library(tidyverse)
 knitr::opts_chunk$set(
   echo = knitr::is_html_output(),
   cache = TRUE,
-  cache.rebuild = TRUE,
+  cache.rebuild = FALSE,
   warning = FALSE,
   message = FALSE,
   fig.align = "center",
@@ -123,13 +124,14 @@ dat <- dat |>
     .keep = "unused"
   )
 
-# Center covariates
+# Center covariates & hunger
 dat <- dat |> 
   mutate(
     across(
-      c(familiarity_vr, age, bmi, presence, trait_g, trait_o, state_i), 
+      c(familiarity_vr, age, bmi, trait_g, trait_o), 
       ~as.numeric(scale(., scale = FALSE))
-    )
+    ),
+    hmc = hunger - mean(hunger, na.rm = TRUE)
   )
 
 # Exclude people who guessed study aim
@@ -212,7 +214,7 @@ To examine the effects of stimulus type and exposure mode on both psychological 
 #| label: h1-sample
 #| output: false
 
-# Estimate the model
+# Estimate main model
 fit_craving <- brm(
   craving ~
     stimulus * exposure + familiarity_vr + gender + age + bmi +
@@ -243,7 +245,7 @@ sm <- function(x, test = "pd", rope_range = c(-0.1, 0.1)) {
     rope_range = rope_range
   ) |> 
     select(-any_of(c("CI", "ROPE_CI", "ROPE_low", "ROPE_high"))) |> 
-      # Compatibility between different kinds of summaries
+    # Compatibility between different kinds of summaries
     rename(contrast = any_of("Parameter")) |> 
     mutate(
       # Leave numerics in
@@ -263,27 +265,61 @@ sm <- function(x, test = "pd", rope_range = c(-0.1, 0.1)) {
 We then proceeded to test H1A (ΔFCR [F - NF] > 0), and show the results in @tbl-h1a and @fig-h1a. Given the directional hypothesis, and our plan to use a conventional 5% cutoff, the results showed that food stimuli elicit greater craving in all exposure conditions, but greater salivary volume only in the real life condition.
 
 ```{r}
+#| label: h1-contrasts
+
+# Calculate all contrasts
+dat_h1 <- tibble(
+  Outcome = factor(c("Craving", "Salivary Volume")),
+  sd = c(sd(dat$craving), sd(dat$volume)),
+  fit = list(fit_craving, fit_volume),
+  # Expected marginal means in all six conditions
+  emm = map(
+    fit,
+    ~emmeans(.x, ~stimulus * exposure)
+  ),
+  # Stimulus effect (dFCR) by exposure mode
+  h1a = map(
+    emm, 
+    ~contrast(.x, "revpairwise", by = "exposure") |> 
+      sm()
+  ),
+  # Difference in stimulus effect btwn exposure modes
+  h1b = map2(
+    emm, sd, 
+    ~contrast(.x, "revpairwise", by = "exposure") |> 
+      contrast("pairwise", by = NULL) |> 
+      sm(
+        test = c("pd", "rope"), 
+        rope_range = c(-0.1, 0.1) * .y
+      )
+  )
+)
+
+# Expand table of h1a results
+dat_h1a <- dat_h1 |> 
+  select(Outcome, h1a) |> 
+  unnest(h1a)
+
+# ...And for h1b-d results
+dat_h1b <- dat_h1 |> 
+  select(Outcome, h1b) |> 
+  unnest(h1b) |> 
+  mutate(
+    contrast = str_remove_all(contrast, "\\(ΔFCR "),
+    contrast = str_remove_all(contrast, "\\)"),
+    contrast = factor(
+      contrast,
+      levels = c("RL - UVR", "RL - MVR", "MVR - UVR")
+    )
+  )
+```
+
+
+```{r}
 #| label: tbl-h1a
 #| tbl-cap: Differences in food-cue responses across exposure conditions. Mean, SD, and CI indicate the posterior mean, standard deviation, and 95% Credible Interval. pd indicates the posterior probability of direction.
 
-emm_h1a_craving <- emmeans(fit_craving, ~stimulus * exposure)
-emm_h1a_craving_res <- contrast(
-  emm_h1a_craving, "revpairwise", by = "exposure"
-) |> 
-  sm()
-emm_h1a_volume <- emmeans(fit_volume, ~stimulus * exposure)
-emm_h1a_volume_res <- contrast(
-  emm_h1a_volume, "revpairwise", by = "exposure"
-) |> 
-  sm()
-bind_rows(
-  emm_h1a_craving_res,
-  emm_h1a_volume_res,
-  .id = "Outcome"
-) |> 
-  mutate(
-    Outcome = factor(Outcome, labels = c("Craving", "Volume"))
-  ) |> 
+dat_h1a |> 
   select(-starts_with("CI_"), -pdn) |> 
   kable()
 ```
@@ -292,19 +328,7 @@ bind_rows(
 #| label: fig-h1a
 #| fig-cap: Differences in food-cue responses across exposure conditions.
 
-p_h1a <- bind_rows(
-  emm_h1a_craving_res,
-  emm_h1a_volume_res,
-  .id = "Outcome"
-) |>
-  mutate(
-    Outcome = factor(Outcome, labels = c("Craving", "Salivary Volume")),
-    exposure = factor(
-      exposure, 
-      levels = c("RL", "UVR", "MVR")
-    )
-  ) |> 
-  tibble() |> 
+p_h1a <- dat_h1a |> 
   ggplot(aes(exposure, Mean, fill = pdn > 0.95)) +
   scale_fill_manual(values = c("white", "black")) +
   scale_y_continuous(
@@ -334,30 +358,7 @@ Our second hypothesis (H1B) concerned differences in ΔFCRs between exposure con
 #| label: tbl-h1b
 #| tbl-cap: Differences in food-cue response differences between different exposure conditions.
 
-emm_h1b_craving <- contrast(emm_h1a_craving, "revpairwise", by = "exposure") |> 
-  contrast("pairwise", by = NULL) |> 
-  sm(
-    test = c("pd", "rope"), 
-    rope_range = c(-0.1, 0.1) * sd(dat$craving)
-  ) |> 
-  tibble()
-emm_h1b_volume <- contrast(emm_h1a_volume, "revpairwise", by = "exposure") |> 
-  contrast("pairwise", by = NULL) |> 
-  sm(
-    test = c("pd", "rope"), 
-    rope_range = c(-0.1, 0.1) * sd(dat$volume)
-  ) |> 
-  tibble()
-bind_rows(
-  emm_h1b_craving,
-  emm_h1b_volume,
-  .id = "Outcome"
-) |> 
-  mutate(
-    Outcome = factor(Outcome, labels = c("Craving", "Volume")),
-    contrast = str_remove_all(contrast, "\\(ΔFCR "),
-    contrast = str_remove_all(contrast, "\\)")
-  ) |> 
+dat_h1b |> 
   select(-starts_with("CI_")) |> 
   kable()
 ```
@@ -366,23 +367,7 @@ bind_rows(
 #| label: fig-h1b
 #| fig-cap: Differences in food-cue response differences between different exposure conditions.
 
-p_h1b <- bind_rows(
-  emm_h1b_craving,
-  emm_h1b_volume,
-  .id = "Outcome"
-) |> 
-  mutate(
-    Outcome = factor(Outcome, labels = c("Craving", "Salivary Volume")),
-    contrast = str_remove_all(contrast, "\\(ΔFCR "),
-    contrast = str_remove_all(contrast, "\\)")
-  ) |> 
-  mutate(
-    contrast = factor(
-      contrast,
-      levels = c("RL - UVR", "RL - MVR", "MVR - UVR")
-    )
-  ) |> 
-  tibble() |> 
+p_h1b <- dat_h1b |> 
   ggplot(aes(contrast, Mean, fill = pdn > 0.95)) +
   scale_fill_manual(values = c("white", "black")) +
   scale_y_continuous(
@@ -432,28 +417,30 @@ We then hypothesized that the difference between food vs non-food FCR is equal i
 ```{r}
 #| label: fig-h1
 #| fig-cap: Combined figure of H1 results
+
 p_h1b <- p_h1b + 
   scale_x_discrete(labels = ~str_replace(.x, " - ", " -\n"))
 (p_h1a | p_h1b) +
-  plot_annotation(tag_levels = "A")
+  plot_annotation(tag_levels = "A") +
+  plot_layout(axes = "collect")
 ```
 
 ## Hypothesis 2
 
 ```{r}
 #| label: fig-dag
-#| fig-height: 1.4
-#| fig-width: 1.6
+#| fig-height: 1
+#| fig-width: 2
 #| fig-cap: "Schematic of the proposed mediation model. E: Exposure, P: Presence, FCR: Food cue response."
 
 library(dagitty)
 g <- dagitty("dag{ 
-  E -> P -> FCR ;
-  E -> FCR ;
+  E -> P -> FCRs ;
+  E -> FCRs ;
  }")
 coordinates(g) <- list(
-  x = c(E = 0, P = 1, FCR = 2),
-  y = c(E = 0, P = -0.1, FCR = 0)
+  x = c(E = 0, P = 1, FCRs = 2),
+  y = c(E = 0, P = -0.1, FCRs = 0)
 )
 plot(g)
 ```
@@ -587,20 +574,21 @@ p1 <- plot(
   plot = FALSE,
   cat_args = list(size = 3)
   )[[1]] +
-  labs(x = "Exposure", y = "Presence") |
+  labs(x = "Exposure Mode", y = "Presence") |
   plot(
     cc2, 
     plot = FALSE,
     line_args = list(color = "black", linewidth = 0.5)
   )[[1]] +
-  labs(x = "Presence", y = "FCR [Craving]") |
+  labs(x = "Presence", y = "Craving") |
   plot(
     cc3, 
     plot = FALSE,
     line_args = list(color = "black", linewidth = 0.5)
   )[[1]] +
-  labs(x = "Presence", y = "FCR [Volume]")
-p1 + plot_layout(widths = c(2, 4, 4))
+  labs(x = "Presence", y = "Salivary Volume")
+h2_p1 <- p1 + plot_layout(widths = c(2, 4, 4))
+h2_p1
 ```
 
 ## Exploratory analyses
@@ -608,11 +596,10 @@ p1 + plot_layout(widths = c(2, 4, 4))
 ### Adjusting for hunger
 
 ```{r}
-dat <- dat |> 
-  mutate(hmc = hunger - mean(hunger, na.rm = TRUE))
+#| results: false
 
-# Estimate the model
-fit_craving_ha <- brm(
+# Copypasted from above but adjusting for hmc
+fit_craving_hunger <- brm(
   craving ~
     stimulus * exposure + familiarity_vr + gender + age + bmi + hmc +
     (1 | participant_id),
@@ -621,7 +608,7 @@ fit_craving_ha <- brm(
   file = paste0(model_dir, "brm-h1-craving-hmc")
 )
 
-fit_volume_ha <- brm(
+fit_volume_hunger <- brm(
   volume ~
     stimulus * exposure + familiarity_vr + gender + age + bmi + hmc +
     (1 | participant_id),
@@ -629,9 +616,78 @@ fit_volume_ha <- brm(
   iter = ITER,
   file = paste0(model_dir, "brm-h1-volume-hmc")
 )
+
+# Calculate all contrasts
+dat_h1 <- dat_h1 |> 
+  mutate(fit_hunger = list(fit_craving_hunger, fit_volume_hunger)) |> 
+  mutate(
+  # Expected marginal means in all six conditions
+  emm_hunger = map(
+    fit_hunger,
+    ~emmeans(.x, ~stimulus * exposure)
+  ),
+  # Stimulus effect (dFCR) by exposure mode
+  h1a_hunger = map(
+    emm_hunger, 
+    ~contrast(.x, "revpairwise", by = "exposure") |> 
+      sm()
+  ),
+  # Difference in stimulus effect btwn exposure modes
+  h1b_hunger = map2(
+    emm_hunger, sd, 
+    ~contrast(.x, "revpairwise", by = "exposure") |> 
+      contrast("pairwise", by = NULL) |> 
+      sm(
+        test = c("pd", "rope"), 
+        rope_range = c(-0.1, 0.1) * .y
+      )
+  )
+)
 ```
 
 
+```{r}
+#| label: tbl-h1a-hunger
+#| tbl-cap: Differences in food-cue responses across exposure conditions for the baseline model and the model that adjusts for hunger. Numbers indicate posterior means, [95%CIs], and (p+).
+
+# Expand table of h1a results
+dat_h1 |> 
+  select(Outcome, h1a, h1a_hunger) |> 
+  pivot_longer(c(h1a, h1a_hunger), names_to = "Adjust") |> 
+  unnest(value) |> 
+  mutate(
+    Adjust = factor(
+      Adjust, 
+      levels = c("h1a", "h1a_hunger"), 
+      labels = c("No", "Yes")
+    ),
+    Estimate = str_glue("{number(Mean, .01)} {CI} ({pd})")
+  ) |> 
+  select(Outcome, contrast, exposure, Adjust, Estimate) |> 
+  arrange(Outcome, exposure, Adjust) |> 
+  kable()
+```
+
+```{r}
+#| label: tbl-h1b-hunger
+#| tbl-cap: Differences in food-cue response differences between exposure conditions.
+
+dat_h1 |> 
+  select(Outcome, h1b, h1b_hunger) |> 
+  pivot_longer(c(h1b, h1b_hunger), names_to = "Adjust") |> 
+  unnest(value) |> 
+  mutate(
+    Adjust = factor(
+      Adjust, 
+      levels = c("h1b", "h1b_hunger"), 
+      labels = c("No", "Yes")
+    ),
+    Estimate = str_glue("{number(Mean, .01)} {CI} ({pd})")
+  ) |>
+  select(Outcome, contrast, Adjust, Estimate, ROPE) |> 
+  arrange(Outcome, contrast, Adjust) |> 
+  kable()
+```
 
 
 ### State imagery
@@ -744,22 +800,46 @@ p1 <- plot(
   plot = FALSE,
   line_args = list(color = "black", linewidth = 0.5)
 )[[1]] +
-  labs(x = "Exposure", y = "State imagery") |
+  labs(x = "Exposure Mode", y = "State imagery") |
   plot(
     cc2, 
     plot = FALSE, 
     line_args = list(color = "black", linewidth = 0.5)
   )[[1]] +
-  labs(x = "State imagery", y = "FCR [Craving]") |
+  labs(x = "State imagery", y = "Craving") |
   plot(
     cc3, 
     plot = FALSE,
     line_args = list(color = "black", linewidth = 0.5)
   )[[1]] +
-  labs(x = "State imagery", y = "FCR [Volume]")
+  labs(x = "State imagery", y = "Salivary Volume")
 
-p1 + plot_layout(widths = c(2, 4, 4))
+e1_p1 <- p1 + plot_layout(widths = c(2, 4, 4))
+e1_p1
 ```
+
+```{r}
+#| label: fig-med-combo
+#| fig-cap: Combined mediation figure.
+#| fig-height: 5
+
+(h2_p1 / e1_p1) +
+  plot_annotation(tag_levels = "A")
+```
+
+#### Correlations
+
+```{r}
+dat_cor <- dat |> 
+  summarise(
+    across(c(state_i, trait_g, trait_o), mean),
+    .by = participant_id
+  )
+
+print(cor.test(dat_cor$state_i, dat_cor$trait_g), digits = 5)
+print(cor.test(dat_cor$state_i, dat_cor$trait_o), digits = 5)
+```
+
 
 ### Trait imagery
 
