@@ -47,6 +47,7 @@ library(tidyverse)
 knitr::opts_chunk$set(
   echo = knitr::is_html_output(),
   cache = TRUE,
+  cache.rebuild = TRUE,
   warning = FALSE,
   message = FALSE,
   fig.align = "center",
@@ -242,10 +243,12 @@ sm <- function(x, test = "pd", rope_range = c(-0.1, 0.1)) {
     rope_range = rope_range
   ) |> 
     select(-any_of(c("CI", "ROPE_CI", "ROPE_low", "ROPE_high"))) |> 
+      # Compatibility between different kinds of summaries
+    rename(contrast = any_of("Parameter")) |> 
     mutate(
       # Leave numerics in
       pdn = pd,
-      Parameter = str_replace_all(Parameter, "F - NF", "ΔFCR"),
+      contrast = str_replace_all(contrast, "F - NF", "ΔFCR"),
       across(any_of(c("pd", "ROPE_Percentage")), ~percent(., .01))
     ) |> 
     mutate(
@@ -296,14 +299,13 @@ p_h1a <- bind_rows(
 ) |>
   mutate(
     Outcome = factor(Outcome, labels = c("Craving", "Salivary Volume")),
-    Parameter = factor(
-      Parameter, 
-      levels = c("ΔFCR RL", "ΔFCR UVR", "ΔFCR MVR"),
-      labels = c("RL", "UVR", "MVR")
+    exposure = factor(
+      exposure, 
+      levels = c("RL", "UVR", "MVR")
     )
   ) |> 
   tibble() |> 
-  ggplot(aes(Parameter, Mean, fill = pdn > 0.95)) +
+  ggplot(aes(exposure, Mean, fill = pdn > 0.95)) +
   scale_fill_manual(values = c("white", "black")) +
   scale_y_continuous(
     "ΔFCR"
@@ -353,9 +355,8 @@ bind_rows(
 ) |> 
   mutate(
     Outcome = factor(Outcome, labels = c("Craving", "Volume")),
-    Parameter = str_remove_all(Parameter, "ΔFCR "),
-    Parameter = str_remove_all(Parameter, "\\("),
-    Parameter = str_remove_all(Parameter, "\\)")
+    contrast = str_remove_all(contrast, "\\(ΔFCR "),
+    contrast = str_remove_all(contrast, "\\)")
   ) |> 
   select(-starts_with("CI_")) |> 
   kable()
@@ -372,17 +373,17 @@ p_h1b <- bind_rows(
 ) |> 
   mutate(
     Outcome = factor(Outcome, labels = c("Craving", "Salivary Volume")),
-    Parameter = str_remove_all(Parameter, "\\(ΔFCR "),
-    Parameter = str_remove_all(Parameter, "\\)")
+    contrast = str_remove_all(contrast, "\\(ΔFCR "),
+    contrast = str_remove_all(contrast, "\\)")
   ) |> 
   mutate(
-    Parameter = factor(
-      Parameter,
+    contrast = factor(
+      contrast,
       levels = c("RL - UVR", "RL - MVR", "MVR - UVR")
     )
   ) |> 
   tibble() |> 
-  ggplot(aes(Parameter, Mean, fill = pdn > 0.95)) +
+  ggplot(aes(contrast, Mean, fill = pdn > 0.95)) +
   scale_fill_manual(values = c("white", "black")) +
   scale_y_continuous(
     "ΔFCR"
@@ -524,9 +525,7 @@ We show the results in @tbl-h2 and @fig-h2: While the multisensory VR exposure l
 hypotheses_craving <- c(
   `E->P` = "presence_exposureMVR = 0",
   `P->FCR` = "craving_presence = 0",
-  `E->P * P->FCR` = "presence_exposureMVR * craving_presence = 0",
-  Prop_mediated = "(presence_exposureMVR * craving_presence) / 
-    (presence_exposureMVR * craving_presence + craving_exposureMVR) = 0"
+  `E->P * P->FCR` = "presence_exposureMVR * craving_presence = 0"
 )
 
 h_craving <- hypothesis(
@@ -555,7 +554,6 @@ bind_rows(
 ) |> 
   mutate(Outcome = factor(Outcome, labels = c("Craving", "Volume"))) |> 
   select(-starts_with("CI_"), -pdn) |> 
-  filter(Parameter != "Prop_mediated") |> 
   kable()
 ```
 
@@ -607,6 +605,35 @@ p1 + plot_layout(widths = c(2, 4, 4))
 
 ## Exploratory analyses
 
+### Adjusting for hunger
+
+```{r}
+dat <- dat |> 
+  mutate(hmc = hunger - mean(hunger, na.rm = TRUE))
+
+# Estimate the model
+fit_craving_ha <- brm(
+  craving ~
+    stimulus * exposure + familiarity_vr + gender + age + bmi + hmc +
+    (1 | participant_id),
+  dat,
+  iter = ITER,
+  file = paste0(model_dir, "brm-h1-craving-hmc")
+)
+
+fit_volume_ha <- brm(
+  volume ~
+    stimulus * exposure + familiarity_vr + gender + age + bmi + hmc +
+    (1 | participant_id),
+  dat,
+  iter = ITER,
+  file = paste0(model_dir, "brm-h1-volume-hmc")
+)
+```
+
+
+
+
 ### State imagery
 
 We then turned to our more exploratory analyses. Our first aim was to examine whether state gustatory mental imagery might mediate any effects of VR exposure mode on FCRs. To do so, we conducted mediation analyses as above (Hypothesis 2) but used imagery as the mediator rather than presence. (Consequently, no aggregation was necessary because imagery was rated after each trial.) We show the results in @tbl-e1 and @fig-e1: While the multisensory VR exposure led to elevated imagery, imagery credibly predicted only craving (and thus the indirect path of exposure mode on craving via imagery was credibly nonzero) but not salivary volume FCR.
@@ -655,9 +682,7 @@ fit_volume_e1 <- brm(
 hypotheses_craving <- c(
   `E->I` = "statei_exposureMVR = 0",
   `I->FCR` = "craving_state_i = 0",
-  `E->I * I->FCR` = "statei_exposureMVR * craving_state_i = 0",
-  Prop_mediated = "(statei_exposureMVR * craving_state_i) / 
-    (statei_exposureMVR * craving_state_i + craving_exposureMVR) = 0"
+  `E->I * I->FCR` = "statei_exposureMVR * craving_state_i = 0"
 )
 
 h_craving <- hypothesis(
@@ -686,7 +711,6 @@ bind_rows(
 ) |> 
   mutate(Outcome = factor(Outcome, labels = c("Craving", "Volume"))) |>
   select(-starts_with("CI_"), -pdn) |> 
-  filter(Parameter != "Prop_mediated") |> 
   kable()
 ```
 
@@ -797,8 +821,8 @@ tibble(
   select(-model) |> 
   unnest(res) |> 
   mutate(
-    Parameter = str_replace(Parameter, "b_stimulusF", "Food"),
-    Parameter = str_remove(Parameter, "exposure")
+    contrast = str_replace(contrast, "b_stimulusF", "Food"),
+    contrast = str_remove(contrast, "exposure")
   ) |> 
   select(-starts_with("CI_"), -pdn) |> 
   kable()
