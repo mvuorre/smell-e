@@ -16,10 +16,12 @@ format:
     toc-depth: 3
     toc-title: Contents
     df-print: kable
-    embed-resources: true
+    embed-resources: false
   docx: default
 title-block-banner: true
 title-block-style: default
+params:
+  exclude: FALSE
 ---
 
 ```{r}
@@ -60,7 +62,9 @@ theme_set(
 )
 
 # Other options
-dir.create("models", FALSE)
+model_dir <- "models/"
+if (params$exclude) model_dir <- "models-excluded/"
+dir.create(model_dir, FALSE)
 options(  
   # Table options
   knitr.kable.NA = "",
@@ -95,7 +99,7 @@ dat <- dat |>
     participant_id,
     exposure = factor(
       exposure_mode_uvr_vs_mvr_vs_rl, 
-      levels = c("RL", "MVR", "UVR"),
+      levels = c("RL", "UVR", "MVR"),
     ),
     stimulus = factor(
       stimuli_type_nf_vs_f,
@@ -127,20 +131,22 @@ dat <- dat |>
     )
   )
 
-# Exclude people
-dat <- filter(
-  dat,
-  debriefing_check_guessed_study_aim_yes_no == "No"
-)
+# Exclude people who guessed study aim
+if (params$exclude) {
+  dat <- filter(
+    dat,
+    debriefing_check_guessed_study_aim_yes_no == "No"
+  )
+}
 ```
 
 # Results
 
-We show the data summaries in @fig-data and @tbl-data.
+We show the data summaries in @fig-data and @tbl-data (N = `{r} length(unique(dat$participant_id))`).
 
 ```{r}
 #| label: fig-data
-#| fig-cap: Craving (left) and salivary volume (right) means and SEs across the study conditions.
+#| fig-cap: Craving (left) and salivary volume (right) means and 95%CIs across the study conditions.
 
 p1 <- dat |> 
   ggplot(aes(exposure, craving, col = stimulus)) +
@@ -152,7 +158,7 @@ p1 <- dat |>
     palette = "Set1"
   ) +
   stat_summary(
-    fun.data = mean_se,
+    fun.data = mean_cl_normal,
     size = 0.55,
     position = position_dodge(width = .2)
   ) +
@@ -163,11 +169,12 @@ p1 <- dat |>
     linewidth = 0.33,
     position = position_dodge(width = .2)
   ) +
-  labs(x = "Exposure", y = "Craving")
+  guides(color = guide_legend(reverse = TRUE)) +
+  labs(x = "Exposure Mode", y = "Craving")
 
 p2 <- p1 +
   aes(y = volume) +
-  labs(y = "Volume")
+  labs(y = "Salivary Volume")
 
 p_data <- (p1 | p2) + plot_layout(guides = "collect")
 p_data
@@ -190,8 +197,9 @@ dat |>
   ) |> 
   pivot_wider(
     names_from = stimulus,
-    values_from = mean_se, names_vary = "slowest"
+    values_from = mean_se
   ) |> 
+  arrange(Outcome, exposure) |> 
   kable()
 ```
 
@@ -210,7 +218,7 @@ fit_craving <- brm(
     (1 | participant_id),
   dat,
   iter = ITER,
-  file = "models/brm-h1-craving"
+  file = paste0(model_dir, "brm-h1-craving")
 )
 
 fit_volume <- brm(
@@ -219,7 +227,7 @@ fit_volume <- brm(
     (1 | participant_id),
   dat,
   iter = ITER,
-  file = paste0("models/", "brm-h1-volume")
+  file = paste0(model_dir, "brm-h1-volume")
 )
 
 # Function to summarise samples
@@ -229,6 +237,7 @@ sm <- function(x, test = "pd", rope_range = c(-0.1, 0.1)) {
     centrality = "mean",
     dispersion = TRUE,
     test = test,
+    ci = 0.95,
     rope_ci = 1.0,
     rope_range = rope_range
   ) |> 
@@ -286,11 +295,11 @@ p_h1a <- bind_rows(
   .id = "Outcome"
 ) |>
   mutate(
-    Outcome = factor(Outcome, labels = c("Craving", "Volume")),
+    Outcome = factor(Outcome, labels = c("Craving", "Salivary Volume")),
     Parameter = factor(
       Parameter, 
-      levels = c("ΔFCR RL", "ΔFCR MVR", "ΔFCR UVR"),
-      labels = c("RL", "MVR", "UVR")
+      levels = c("ΔFCR RL", "ΔFCR UVR", "ΔFCR MVR"),
+      labels = c("RL", "UVR", "MVR")
     )
   ) |> 
   tibble() |> 
@@ -302,8 +311,18 @@ p_h1a <- bind_rows(
   geom_hline(yintercept = 0, linewidth = 0.2) +
   geom_pointrange(aes(ymin = CI_low, ymax = CI_high), shape = 21) +
   guides(fill = "none") +
-  labs(x = "Condition", y = "Estimate") +
-  facet_wrap("Outcome", scales = "free")
+  labs(x = "Exposure Mode", y = "Estimate") +
+  facet_wrap(
+    "Outcome", 
+    scales = "free", 
+    strip.position = "left"
+  ) +
+  theme(
+    axis.title.y = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(color = "black", size = rel(1)),
+    strip.placement = "outside"
+  )
 p_h1a
 ```
 
@@ -352,9 +371,15 @@ p_h1b <- bind_rows(
   .id = "Outcome"
 ) |> 
   mutate(
-    Outcome = factor(Outcome, labels = c("Craving", "Volume")),
+    Outcome = factor(Outcome, labels = c("Craving", "Salivary Volume")),
     Parameter = str_remove_all(Parameter, "\\(ΔFCR "),
     Parameter = str_remove_all(Parameter, "\\)")
+  ) |> 
+  mutate(
+    Parameter = factor(
+      Parameter,
+      levels = c("RL - UVR", "RL - MVR", "MVR - UVR")
+    )
   ) |> 
   tibble() |> 
   ggplot(aes(Parameter, Mean, fill = pdn > 0.95)) +
@@ -365,13 +390,23 @@ p_h1b <- bind_rows(
   geom_hline(yintercept = 0, linewidth = 0.2) +
   geom_pointrange(aes(ymin = CI_low, ymax = CI_high), shape = 21) +
   guides(fill = "none") +
-  labs(x = "Condition", y = "Estimate") +
-  facet_wrap("Outcome", scales = "free")
+  labs(x = "Exposure Mode", y = "Estimate") +
+  facet_wrap(
+    "Outcome", 
+    scales = "free", 
+    strip.position = "left"
+  ) +
+  theme(
+    axis.title.y = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(color = "black", size = rel(1)),
+    strip.placement = "outside"
+  )
 
 p_h1b <- p_h1b +
   geom_hline(
     data = tibble(
-      Outcome = c("Craving", "Volume"),
+      Outcome = c("Craving", "Salivary Volume"),
       rope_low = -0.1 * c(sd(dat$craving), sd(dat$volume)),
       rope_high = 0.1 * c(sd(dat$craving), sd(dat$volume))
     ),
@@ -380,7 +415,7 @@ p_h1b <- p_h1b +
   ) +
     geom_hline(
     data = tibble(
-      Outcome = c("Craving", "Volume"),
+      Outcome = c("Craving", "Salivary Volume"),
       rope_low = -0.1 * c(sd(dat$craving), sd(dat$volume)),
       rope_high = 0.1 * c(sd(dat$craving), sd(dat$volume))
     ),
@@ -391,15 +426,13 @@ p_h1b <- p_h1b +
 p_h1b
 ```
 
-We then hypothesized that the difference between food vs non-food FCR is equal in the multisensory VR condition and real life conditions would be equal. To test this, we decided to treat ΔFCRs within 0.1 standard deviations of the respective FCR as equivalent. Then we calculated the proportion of the respective posterior distribution within that interval to ascertain confidence in the equivalence statement. We labelled these as ROPE_Percentage in @tbl-h1b. These posterior probabilities of equivalence were small (craving: 1%; volume: 45%) and we therefore did not find support for H1D.
+We then hypothesized that the difference between food vs non-food FCR is equal in the multisensory VR condition and real life conditions would be equal. To test this, we decided to treat ΔFCRs within 0.1 standard deviations of the respective FCR as equivalent. (SD of craving = `r number(sd(dat$craving), .01)`, SD of volume = `r number(sd(dat$volume), .01)`). Then we calculated the proportion of the respective posterior distribution within that interval to ascertain confidence in the equivalence statement. We labelled these as ROPE_Percentage in @tbl-h1b. These posterior probabilities of equivalence were small (craving: 1%; volume: 45%) and we therefore did not find support for H1D. 
 
 ```{r}
 #| label: fig-h1
 #| fig-cap: Combined figure of H1 results
-
 p_h1b <- p_h1b + 
   scale_x_discrete(labels = ~str_replace(.x, " - ", " -\n"))
-
 (p_h1a | p_h1b) +
   plot_annotation(tag_levels = "A")
 ```
@@ -462,7 +495,7 @@ fit_craving_h2 <- brm(
   c1 + c2 + set_rescor(FALSE),
   dat_h2,
   iter = ITER,
-  file = paste0("models/", "brm-h2-craving"), 
+  file = paste0(model_dir, "brm-h2-craving"), 
   control = list(adapt_delta = 0.99),
   file_refit = "on_change"
 )
@@ -476,7 +509,7 @@ fit_volume_h2 <- brm(
   c1 + v2 + set_rescor(FALSE),
   dat_h2,
   iter = ITER,
-  file = paste0("models/", "brm-h2-volume"),
+  file = paste0(model_dir, "brm-h2-volume"),
   control = list(adapt_delta = 0.99),
   file_refit = "on_change"
 )
@@ -522,6 +555,7 @@ bind_rows(
 ) |> 
   mutate(Outcome = factor(Outcome, labels = c("Craving", "Volume"))) |> 
   select(-starts_with("CI_"), -pdn) |> 
+  filter(Parameter != "Prop_mediated") |> 
   kable()
 ```
 
@@ -594,7 +628,7 @@ fit_craving_e1 <- brm(
   c1 + c2 + set_rescor(FALSE),
   dat_e1,
   iter = ITER,
-  file = paste0("models/", "brm-craving-e1"),
+  file = paste0(model_dir, "brm-craving-e1"),
   control = list(adapt_delta = 0.99),
   file_refit = "on_change"
 )
@@ -608,7 +642,7 @@ fit_volume_e1 <- brm(
   c1 + v2 + set_rescor(FALSE),
   dat_e1,
   iter = ITER,
-  file = paste0("models/", "brm-volume-e1"),
+  file = paste0(model_dir, "brm-volume-e1"),
     control = list(adapt_delta = 0.99),
   file_refit = "on_change"
 )
@@ -652,6 +686,7 @@ bind_rows(
 ) |> 
   mutate(Outcome = factor(Outcome, labels = c("Craving", "Volume"))) |>
   select(-starts_with("CI_"), -pdn) |> 
+  filter(Parameter != "Prop_mediated") |> 
   kable()
 ```
 
@@ -716,7 +751,7 @@ fit_craving_e2g <- brm(
     (1 | participant_id),
   dat,
   iter = ITER,
-  file = paste0("models/", "brm-craving-e2g")
+  file = paste0(model_dir, "brm-craving-e2g")
 )
 fit_craving_e2o <- brm(
   craving ~
@@ -724,7 +759,7 @@ fit_craving_e2o <- brm(
     (1 | participant_id),
   dat,
   iter = ITER,
-  file = paste0("models/", "brm-craving-e2o")
+  file = paste0(model_dir, "brm-craving-e2o")
 )
 
 fit_volume_e2g <- brm(
@@ -733,7 +768,7 @@ fit_volume_e2g <- brm(
     (1 | participant_id),
   dat,
   iter = ITER,
-  file = paste0("models/", "brm-volume-e2g")
+  file = paste0(model_dir, "brm-volume-e2g")
 )
 fit_volume_e2o <- brm(
   volume ~
@@ -741,7 +776,7 @@ fit_volume_e2o <- brm(
     (1 | participant_id),
   dat,
   iter = ITER,
-  file = paste0("models/", "brm-volume-e2o")
+  file = paste0(model_dir, "brm-volume-e2o")
 )
 ```
 
@@ -781,7 +816,8 @@ tmp <- dat |>
   distinct(participant_id, debriefing_check_guessed_study_aim_yes_no) |> 
   pull(debriefing_check_guessed_study_aim_yes_no) |> 
   table()
-binom.test(rev(tmp))
+binom.test(rev(tmp)) |> 
+  print(digits = 2)
 ```
 
 The proportion of individuals with "Yes" in `debriefing_check_guessed_study_aim_yes_no` was 0.29.
@@ -798,7 +834,8 @@ tmp <- dat |>
     liking = mean(liking),
     .by = participant_id
   )
-z.test(tmp$hunger, mu = 50, sigma.x = sd(tmp$hunger))
+z.test(tmp$hunger, mu = 50, sigma.x = sd(tmp$hunger)) |> 
+  print(digits = 5)
 ```
 
 Mean hunger was not significantly different from 50.
@@ -806,7 +843,8 @@ Mean hunger was not significantly different from 50.
 ```{r}
 #| label: manip-check-2
 
-z.test(tmp$craving, mu = 62.95, sigma.x = sd(tmp$craving))
+z.test(tmp$craving, mu = 62.95, sigma.x = sd(tmp$craving)) |> 
+  print(digits = 5)
 ```
 
 Mean craving was significantly less than 62.95.
@@ -814,7 +852,8 @@ Mean craving was significantly less than 62.95.
 ```{r}
 #| label: manip-check-3
 
-z.test(tmp$liking, mu = 50, sigma.x = sd(tmp$liking))
+z.test(tmp$liking, mu = 50, sigma.x = sd(tmp$liking)) |> 
+  print(digits = 6)
 ```
 
 Mean liking was significantly greater than 50.

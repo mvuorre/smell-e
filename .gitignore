@@ -7,7 +7,7 @@
 .Renviron
 *_cache
 /data/
-/models/
+/models*/
 index_cache/
 index_files/
 *.pdf
